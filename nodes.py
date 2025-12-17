@@ -415,7 +415,7 @@ class Trellis2UnWrapAndRasterizer:
                 "mesh_cluster_refine_iterations": ("INT",{"default":0}),
                 "mesh_cluster_global_iterations": ("INT",{"default":1}),
                 "mesh_cluster_smooth_strength": ("INT",{"default":1}),                
-                "texture_size": ("INT",{"default":1024}),
+                "texture_size": ("INT",{"default":1024, "min":512, "max":16384}),
             },
         }
 
@@ -659,7 +659,7 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
                 "mesh_cluster_refine_iterations": ("INT",{"default":0}),
                 "mesh_cluster_global_iterations": ("INT",{"default":1}),
                 "mesh_cluster_smooth_strength": ("INT",{"default":1}),                
-                "texture_size": ("INT",{"default":1024}),
+                "texture_size": ("INT",{"default":1024, "min":512, "max":16384}),
                 "remesh": ("BOOLEAN",{"default":True}),
                 "remesh_band": ("FLOAT",{"default":1.0}),
                 "remesh_project": ("FLOAT",{"default":0.0}),
