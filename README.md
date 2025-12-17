@@ -9,7 +9,7 @@
 
 You need to have access to facebook dinov3 models in order to use Trellis.2 [https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m](https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m)
 
-Save the model in ComfyUI models folder under "facebook/dinov3-vitl16-pretrain-lvd1689m"
+clone the repository in ComfyUI models folder under "facebook/dinov3-vitl16-pretrain-lvd1689m"
 
 So in ComfyUI/models/facebook/dinov3-vitl16-pretrain-lvd1689m
 
