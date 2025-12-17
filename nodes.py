@@ -207,7 +207,7 @@ class Trellis2SimplifyMesh:
             "required": {
                 "mesh": ("MESHWITHVOXEL",),
                 "target_face_num": ("INT",{"default":1000000,"min":1,"max":16000000}),
-                "method": (["Cumesh","Meshlib"],{"default":"Meshlib"}),
+                "method": (["Cumesh","Meshlib"],{"default":"Cumesh"}),
             },
         }
 
@@ -298,7 +298,7 @@ class Trellis2PostProcessMesh:
                 # "mesh_cluster_refine_iterations": ("INT",{"default":0}),
                 # "mesh_cluster_global_iterations": ("INT",{"default":1}),
                 # "mesh_cluster_smooth_strength": ("INT",{"default":1}),
-                "remesh": ("BOOLEAN",{"default":False}),
+                "remesh": ("BOOLEAN",{"default":True}),
                 "remesh_band": ("FLOAT",{"default":1.0}),
                 "remesh_project": ("FLOAT",{"default":0.0}),
             },
@@ -656,7 +656,7 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
                 "mesh_cluster_global_iterations": ("INT",{"default":1}),
                 "mesh_cluster_smooth_strength": ("INT",{"default":1}),                
                 "texture_size": ("INT",{"default":1024}),
-                "remesh": ("BOOLEAN",{"default":False}),
+                "remesh": ("BOOLEAN",{"default":True}),
                 "remesh_band": ("FLOAT",{"default":1.0}),
                 "remesh_project": ("FLOAT",{"default":0.0}),
                 "target_face_num": ("INT",{"default":1000000}),
