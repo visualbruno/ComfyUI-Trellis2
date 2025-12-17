@@ -1,7 +1,7 @@
 # 🌀 ComfyUI Wrapper for [https://github.com/microsoft/TRELLIS.2](https://github.com/microsoft/TRELLIS.2)
 ---
 
-** DEVELOPMENT IN PROGRESS - PLEASE WAIT **
+**DEVELOPMENT IN PROGRESS - PLEASE WAIT**
 
 ---
 
@@ -11,7 +11,7 @@
 
 ### 1. Install Wheel
 
-For a standard Python environment:
+#### For a standard python environment:
 
 ```bash
 python -m pip install ComfyUI/custom_nodes/ComfyUI-Trellis2/wheels/Windows/nvdiffrast-0.4.0-cp311-cp311-win_amd64.whl
@@ -30,7 +30,9 @@ python -m pip install ComfyUI/custom_nodes/ComfyUI-Trellis2/wheels/Windows/Cumes
 python -m pip install ComfyUI/custom_nodes/ComfyUI-Trellis2/wheels/Windows/Cumesh/Torch280/cumesh-0.0.1-cp311-cp311-win_amd64.whl
 ```
 
-For **ComfyUI Portable**:
+---
+
+#### For ComfyUI Portable:
 
 ```bash
 python_embeded\python.exe -m pip install ComfyUI\custom_nodes\ComfyUI-Trellis2\wheels\Windows\nvdiffrast-0.4.0-cp311-cp311-win_amd64.whl
