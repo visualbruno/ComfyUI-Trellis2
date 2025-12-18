@@ -663,7 +663,7 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
                 "remesh": ("BOOLEAN",{"default":True}),
                 "remesh_band": ("FLOAT",{"default":1.0}),
                 "remesh_project": ("FLOAT",{"default":0.0}),
-                "target_face_num": ("INT",{"default":1000000}),
+                "target_face_num": ("INT",{"default":1000000, "min":100, "max":10000000}),
             },
         }
 
