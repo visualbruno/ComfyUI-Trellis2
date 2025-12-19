@@ -78,6 +78,8 @@ class Trellis2LoadModel:
             "required": {
                 "modelname": (["TRELLIS.2-4B"],),
                 "backend": (["flash_attn","xformers"],{"default":"xformers"}),
+                "device": (["cpu","cuda"],{"default":"cuda"}),
+                "low_vram": ("BOOLEAN",{"default":True}),
             },
         }
 
@@ -87,7 +89,7 @@ class Trellis2LoadModel:
     CATEGORY = "Trellis2Wrapper"
     OUTPUT_NODE = True
 
-    def process(self, modelname, backend):
+    def process(self, modelname, backend, device, low_vram):
         os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
         os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"  # Can save GPU memory
         os.environ['ATTN_BACKEND'] = backend
@@ -111,7 +113,8 @@ class Trellis2LoadModel:
             raise Exception("Facebook Dinov3 model not found in models/facebook/dinov3-vitl16-pretrain-lvd1689m folder")
         
         pipeline = Trellis2ImageTo3DPipeline.from_pretrained(model_path)
-        pipeline.cuda()
+        pipeline.low_vram = low_vram
+        pipeline.to(device)
         
         return (pipeline,)
         
