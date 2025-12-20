@@ -114,7 +114,14 @@ class Trellis2LoadModel:
         
         pipeline = Trellis2ImageTo3DPipeline.from_pretrained(model_path)
         pipeline.low_vram = low_vram
-        pipeline.to(device)
+        
+        if device=="cuda":
+            if low_vram:
+                pipeline.cuda()
+            else:
+                pipeline.to(device)
+        else:
+            pipeline.to(device)
         
         return (pipeline,)
         
