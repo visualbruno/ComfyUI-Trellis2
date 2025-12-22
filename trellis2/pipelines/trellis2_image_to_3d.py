@@ -177,30 +177,93 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         output = output[:, :, :3] * output[:, :, 3:4]
         output = Image.fromarray((output * 255).astype(np.uint8))
         return output
-        
-    def get_cond(self, image: Union[torch.Tensor, list[Image.Image]], resolution: int, include_neg_cond: bool = True) -> dict:
+
+    def get_cond(
+        self,
+        image: Union[torch.Tensor, Image.Image, List[Image.Image]],
+        resolution: int,
+        include_neg_cond: bool = True,
+        *,
+        fusion_mode: str = "concat",   # "concat" or "mean"
+        max_views: int = 4,            # safety cap for 3090
+    ) -> dict:
         """
         Get the conditioning information for the model.
 
         Args:
-            image (Union[torch.Tensor, list[Image.Image]]): The image prompts.
+            image: One of:
+                - PIL Image
+                - list[PIL Image] (multi-view)
+                - torch.Tensor batch (B,H,W,C) from ComfyUI
+            resolution: Conditioning resolution (e.g. 512 or 1024)
+            include_neg_cond: Whether to include negative conditioning
+            fusion_mode: "concat" (recommended) or "mean"
+            max_views: Max number of views to fuse when list/batch is provided
 
         Returns:
-            dict: The conditioning information
+            dict with keys: cond (+ neg_cond if include_neg_cond)
         """
         self.image_cond_model.image_size = resolution
+
+        # ---- Normalize input into what image_cond_model expects ----
+        # Most implementations expect PIL image or list[PIL images].
+        if isinstance(image, torch.Tensor):
+            # Expect ComfyUI IMAGE tensor: (B,H,W,C) float in [0,1]
+            if image.ndim == 4:
+                # Lazy import to avoid circulars if tensor2pil is in nodes/utils
+                from .nodes import tensor2pil 
+                images = [tensor2pil(image[i]) for i in range(min(int(image.shape[0]), max_views))]
+            else:
+                raise ValueError(f"Expected image tensor with shape (B,H,W,C), got {tuple(image.shape)}")
+        elif isinstance(image, Image.Image):
+            images = [image]
+        elif isinstance(image, (list, tuple)):
+            # list of PIL images
+            images = list(image)[:max_views]
+            if not images:
+                raise ValueError("Empty image list provided to get_cond().")
+            if not all(isinstance(im, Image.Image) for im in images):
+                raise TypeError("get_cond() received a list/tuple but not all elements are PIL Images.")
+        else:
+            raise TypeError(f"Unsupported image type for get_cond(): {type(image)}")
+
         if self.low_vram:
             self.image_cond_model.to(self.device)
-        cond = self.image_cond_model(image)
+
+        # ---- Extract per-view conditioning ----
+        cond = self.image_cond_model(images)
+
+        # Normalize shapes:
+        # Common outputs:
+        #   - (V, N, D) for multi-view
+        #   - (1, N, D) for single-view list length=1
+        #   - (N, D) for some single-image extractors
+        if cond.ndim == 2:
+            # (N, D) -> (1, N, D)
+            cond = cond.unsqueeze(0)
+        elif cond.ndim != 3:
+            raise RuntimeError(f"Unexpected cond ndim={cond.ndim}, shape={tuple(cond.shape)}")
+
+        # If we passed multiple views, fuse them into one conditioning sequence
+        if cond.shape[0] > 1:
+            if fusion_mode == "concat":
+                # (V, N, D) -> (1, V*N, D)
+                cond = cond.reshape(1, -1, cond.shape[-1])
+            elif fusion_mode == "mean":
+                # (V, N, D) -> (1, N, D)
+                cond = cond.mean(dim=0, keepdim=True)
+            else:
+                raise ValueError(f"Unknown fusion_mode: {fusion_mode}")
+
         if self.low_vram:
             self.image_cond_model.cpu()
+
         if not include_neg_cond:
-            return {'cond': cond}
+            return {"cond": cond}
+
         neg_cond = torch.zeros_like(cond)
-        return {
-            'cond': cond,
-            'neg_cond': neg_cond,
-        }
+        return {"cond": cond, "neg_cond": neg_cond}
+
 
     def sample_sparse_structure(
         self,
@@ -507,7 +570,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
     @torch.no_grad()
     def run(
         self,
-        image: Image.Image,
+        image: Union[Image.Image, list[Image.Image]],
         num_samples: int = 1,
         seed: int = 42,
         sparse_structure_sampler_params: dict = {},
@@ -552,11 +615,20 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         else:
             raise ValueError(f"Invalid pipeline type: {pipeline_type}")
         
+        # Accept either a single PIL image or a list of PIL images (multi-view)
+        if isinstance(image, (list, tuple)):
+            images = list(image)
+        else:
+            images = [image]
+
         if preprocess_image:
-            image = self.preprocess_image(image)
+            images = [self.preprocess_image(im) for im in images]
+
         torch.manual_seed(seed)
-        cond_512 = self.get_cond([image], 512)
-        cond_1024 = self.get_cond([image], 1024) if pipeline_type != '512' else None
+
+        # Multi-view conditioning happens inside get_cond()
+        cond_512  = self.get_cond(images, 512)
+        cond_1024 = self.get_cond(images, 1024) if pipeline_type != '512' else None
         ss_res = {'512': 32, '1024': 32, '1024_cascade': 32, '1536_cascade': 32}[pipeline_type]
         
         coords = self.sample_sparse_structure(
