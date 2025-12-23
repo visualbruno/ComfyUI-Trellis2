@@ -482,8 +482,8 @@ class Trellis2UnWrapAndRasterizer:
             },
         }
 
-    RETURN_TYPES = ("TRIMESH",)
-    RETURN_NAMES = ("trimesh",)
+    RETURN_TYPES = ("TRIMESH","IMAGE","IMAGE",)
+    RETURN_NAMES = ("trimesh","base_color_texture", "metallic_roughness_texture",)
     FUNCTION = "process"
     CATEGORY = "Trellis2Wrapper"
     OUTPUT_NODE = True
@@ -616,10 +616,13 @@ class Trellis2UnWrapAndRasterizer:
         
         # Create PBR material
         # Standard PBR packs Metallic and Roughness into Blue and Green channels
+        baseColorTexture_np = Image.fromarray(np.concatenate([base_color, alpha], axis=-1))
+        metallicRoughnessTexture_np = Image.fromarray(np.concatenate([np.zeros_like(metallic), roughness, metallic], axis=-1))
+        
         material = Trimesh.visual.material.PBRMaterial(
-            baseColorTexture=Image.fromarray(np.concatenate([base_color, alpha], axis=-1)),
+            baseColorTexture=baseColorTexture_np,
             baseColorFactor=np.array([255, 255, 255, 255], dtype=np.uint8),
-            metallicRoughnessTexture=Image.fromarray(np.concatenate([np.zeros_like(metallic), roughness, metallic], axis=-1)),
+            metallicRoughnessTexture=metallicRoughnessTexture_np,
             metallicFactor=1.0,
             roughnessFactor=1.0,
             alphaMode=alpha_mode,
@@ -645,9 +648,12 @@ class Trellis2UnWrapAndRasterizer:
         )   
 
         del cumesh
-        gc.collect()          
+        gc.collect()    
+
+        baseColorTexture = pil2tensor(baseColorTexture_np)
+        metallicRoughnessTexture = pil2tensor(metallicRoughnessTexture_np)
                 
-        return (textured_mesh,)
+        return (textured_mesh, baseColorTexture, metallicRoughnessTexture, )
         
 class Trellis2MeshWithVoxelAdvancedGenerator:
     @classmethod
@@ -732,8 +738,8 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
             },
         }
 
-    RETURN_TYPES = ("TRIMESH",)
-    RETURN_NAMES = ("trimesh",)
+    RETURN_TYPES = ("TRIMESH","IMAGE","IMAGE",)
+    RETURN_NAMES = ("trimesh","base_color_texture","metallic_roughness_texture",)
     FUNCTION = "process"
     CATEGORY = "Trellis2Wrapper"
     OUTPUT_NODE = True
@@ -928,10 +934,12 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
         
         # Create PBR material
         # Standard PBR packs Metallic and Roughness into Blue and Green channels
+        baseColorTexture_np = Image.fromarray(np.concatenate([base_color, alpha], axis=-1))
+        metallicRoughnessTexture_np = Image.fromarray(np.concatenate([np.zeros_like(metallic), roughness, metallic], axis=-1))
         material = Trimesh.visual.material.PBRMaterial(
-            baseColorTexture=Image.fromarray(np.concatenate([base_color, alpha], axis=-1)),
+            baseColorTexture=baseColorTexture_np,
             baseColorFactor=np.array([255, 255, 255, 255], dtype=np.uint8),
-            metallicRoughnessTexture=Image.fromarray(np.concatenate([np.zeros_like(metallic), roughness, metallic], axis=-1)),
+            metallicRoughnessTexture=metallicRoughnessTexture_np,
             metallicFactor=1.0,
             roughnessFactor=1.0,
             alphaMode=alpha_mode,
@@ -957,9 +965,12 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
         )        
         
         del cumesh
-        gc.collect()          
+        gc.collect()         
+
+        baseColorTexture = pil2tensor(baseColorTexture_np)
+        metallicRoughnessTexture = pil2tensor(metallicRoughnessTexture_np)
         
-        return (textured_mesh,)    
+        return (textured_mesh, baseColorTexture, metallicRoughnessTexture, )    
 
 class Trellis2Remesh:
     @classmethod
