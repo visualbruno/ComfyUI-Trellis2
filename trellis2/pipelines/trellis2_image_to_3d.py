@@ -523,7 +523,10 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             self.models['shape_slat_decoder'].cpu()
             self.models['shape_slat_decoder'].low_vram = False
         hr_resolution = resolution
-        self.unload_shape_slat_decoder()
+        
+        if not self.keep_models_loaded:
+            self.unload_shape_slat_decoder()
+        
         while True:
             quant_coords = torch.cat([
                 hr_coords[:, :1],
@@ -588,8 +591,9 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         if self.low_vram:
             self.models['shape_slat_decoder'].cpu()
             self.models['shape_slat_decoder'].low_vram = False
-         
-        self.unload_shape_slat_decoder()
+        
+        if not self.keep_models_loaded:        
+            self.unload_shape_slat_decoder()
             
         return ret
     
@@ -658,8 +662,9 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         ret = self.models['tex_slat_decoder'](slat, guide_subs=subs) * 0.5 + 0.5
         if self.low_vram:
             self.models['tex_slat_decoder'].cpu()
-            
-        self.unload_tex_slat_decoder()
+        
+        if not self.keep_models_loaded:
+            self.unload_tex_slat_decoder()
         
         return ret
     
@@ -762,7 +767,9 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         # Multi-view conditioning happens inside get_cond()        
         cond_512  = self.get_cond(images, 512, max_views = max_views)
         cond_1024 = self.get_cond(images, 1024, max_views = max_views) if pipeline_type != '512' else None     
-        self.unload_image_cond_model()
+        
+        if not self.keep_models_loaded:
+            self.unload_image_cond_model()
         
         #ss_res = {'512': 32, '1024': 64, '1024_cascade': 32, '1536_cascade': 32}[pipeline_type]
         
