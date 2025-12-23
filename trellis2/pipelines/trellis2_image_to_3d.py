@@ -764,12 +764,12 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         cond_1024 = self.get_cond(images, 1024, max_views = max_views) if pipeline_type != '512' else None     
         self.unload_image_cond_model()
         
-        ss_res = {'512': 32, '1024': 64, '1024_cascade': 32, '1536_cascade': 32}[pipeline_type]
+        #ss_res = {'512': 32, '1024': 64, '1024_cascade': 32, '1536_cascade': 32}[pipeline_type]
         
         # Sampling Sparse Structure
         self.load_sparse_structure_model()        
         coords = self.sample_sparse_structure(
-            cond_512, ss_res,
+            cond_512, sparse_structure_resolution,
             num_samples, sparse_structure_sampler_params
         )
         
