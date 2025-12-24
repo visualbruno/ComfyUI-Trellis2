@@ -14,6 +14,12 @@ from .. import models
 import gc
 import os
 import folder_paths
+import trimesh
+import o_voxel
+import cumesh
+import nvdiffrast.torch as dr
+import cv2
+import flex_gemm
 
 
 class Trellis2ImageTo3DPipeline(Pipeline):
@@ -243,7 +249,20 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         if self.models['tex_slat_flow_model_1024'] is not None:
             del self.models['tex_slat_flow_model_1024']
             self.models['tex_slat_flow_model_1024'] = None
-            gc.collect()             
+            gc.collect()      
+
+    def load_shape_slat_encoder(self):        
+        if self.models['shape_slat_encoder'] is None:
+            print('Loading Shape Slat Encoder model ...')
+            self.models['shape_slat_encoder'] = models.from_pretrained(f"{self.path}/ckpts/shape_enc_next_dc_f16c32_fp16")
+            self.models['shape_slat_encoder'].eval()
+            self.models['shape_slat_encoder'].to(self._device)
+
+    def unload_shape_slat_encoder(self):
+        if self.models['shape_slat_encoder'] is not None:
+            del self.models['shape_slat_encoder']
+            self.models['shape_slat_encoder'] = None
+            gc.collect()               
 
     def to(self, device: torch.device) -> None:
         self._device = device
@@ -638,7 +657,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
     def decode_tex_slat(
         self,
         slat: SparseTensor,
-        subs: List[SparseTensor],
+        subs: List[SparseTensor] = None,
     ) -> SparseTensor:
         """
         Decode the structured latent.
@@ -654,7 +673,12 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         
         if self.low_vram:
             self.models['tex_slat_decoder'].to(self.device)
-        ret = self.models['tex_slat_decoder'](slat, guide_subs=subs) * 0.5 + 0.5
+            
+        if subs is None:
+            ret = self.models['tex_slat_decoder'](slat) * 0.5 + 0.5
+        else:
+            ret = self.models['tex_slat_decoder'](slat, guide_subs=subs) * 0.5 + 0.5
+            
         if self.low_vram:
             self.models['tex_slat_decoder'].cpu()
         
@@ -879,3 +903,214 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             return out_mesh, (shape_slat, tex_slat, res)
         else:
             return out_mesh
+
+    def preprocess_mesh(self, mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+        """
+        Preprocess the input mesh.
+        """
+        vertices = mesh.vertices
+        vertices_min = vertices.min(axis=0)
+        vertices_max = vertices.max(axis=0)
+        center = (vertices_min + vertices_max) / 2
+        scale = 0.99999 / (vertices_max - vertices_min).max()
+        vertices = (vertices - center) * scale
+        tmp = vertices[:, 1].copy()
+        vertices[:, 1] = -vertices[:, 2]
+        vertices[:, 2] = tmp
+        assert np.all(vertices >= -0.5) and np.all(vertices <= 0.5), 'vertices out of range'
+        return trimesh.Trimesh(vertices=vertices, faces=mesh.faces, process=False)
+
+    def encode_shape_slat(
+        self,
+        mesh: trimesh.Trimesh,
+        resolution: int = 1024,
+    ) -> SparseTensor:
+        """
+        Encode the meshes to structured latent.
+
+        Args:
+            mesh (trimesh.Trimesh): The mesh to encode.
+            resolution (int): The resolution of mesh
+        
+        Returns:
+            SparseTensor: The encoded structured latent.
+        """
+        vertices = torch.from_numpy(mesh.vertices).float()
+        faces = torch.from_numpy(mesh.faces).long()
+        
+        voxel_indices, dual_vertices, intersected = o_voxel.convert.mesh_to_flexible_dual_grid(
+            vertices.cpu(), faces.cpu(),
+            grid_size=resolution,
+            aabb=[[-0.5,-0.5,-0.5],[0.5,0.5,0.5]],
+            face_weight=1.0,
+            boundary_weight=0.2,
+            regularization_weight=1e-2,
+            timing=True,
+        )
+            
+        vertices = SparseTensor(
+            feats=dual_vertices * resolution - voxel_indices,
+            coords=torch.cat([torch.zeros_like(voxel_indices[:, 0:1]), voxel_indices], dim=-1)
+        ).to(self.device)
+        intersected = vertices.replace(intersected).to(self.device)
+            
+        self.load_shape_slat_encoder()
+            
+        if self.low_vram:
+            self.models['shape_slat_encoder'].to(self.device)
+        shape_slat = self.models['shape_slat_encoder'](vertices, intersected)
+        if self.low_vram:
+            self.models['shape_slat_encoder'].cpu()
+            
+        if not self.keep_models_loaded:
+            self.unload_shape_slat_encoder()
+            
+        return shape_slat
+
+    def postprocess_mesh(
+        self,
+        mesh: trimesh.Trimesh,
+        pbr_voxel: SparseTensor,
+        resolution: int = 1024,
+        texture_size: int = 1024,
+        texture_alpha_mode = 'OPAQUE',
+        double_side_material = True
+    ):
+        vertices = mesh.vertices
+        faces = mesh.faces
+        normals = mesh.vertex_normals
+        vertices_torch = torch.from_numpy(vertices).float().cuda()
+        faces_torch = torch.from_numpy(faces).int().cuda()
+        if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'uv') and mesh.visual.uv is not None:
+            uvs = mesh.visual.uv.copy()
+            uvs[:, 1] = 1 - uvs[:, 1]
+            uvs_torch = torch.from_numpy(uvs).float().cuda()
+        else:
+            _cumesh = cumesh.CuMesh()
+            _cumesh.init(vertices_torch, faces_torch)
+            print('Unwrapping mesh ...')
+            vertices_torch, faces_torch, uvs_torch, vmap = _cumesh.uv_unwrap(return_vmaps=True)
+            vertices_torch = vertices_torch.cuda()
+            faces_torch = faces_torch.cuda()
+            uvs_torch = uvs_torch.cuda()
+            vertices = vertices_torch.cpu().numpy()
+            faces = faces_torch.cpu().numpy()
+            uvs = uvs_torch.cpu().numpy()
+            normals = normals[vmap.cpu().numpy()]
+                
+        # rasterize
+        print('Finalizing mesh ...')
+        ctx = dr.RasterizeCudaContext()
+        uvs_torch = torch.cat([uvs_torch * 2 - 1, torch.zeros_like(uvs_torch[:, :1]), torch.ones_like(uvs_torch[:, :1])], dim=-1).unsqueeze(0)
+        rast, _ = dr.rasterize(
+            ctx, uvs_torch, faces_torch,
+            resolution=[texture_size, texture_size],
+        )
+        mask = rast[0, ..., 3] > 0
+        pos = dr.interpolate(vertices_torch.unsqueeze(0), rast, faces_torch)[0][0]
+        
+        attrs = torch.zeros(texture_size, texture_size, pbr_voxel.shape[1], device=self.device)
+        attrs[mask] = flex_gemm.ops.grid_sample.grid_sample_3d(
+            pbr_voxel.feats,
+            pbr_voxel.coords,
+            shape=torch.Size([*pbr_voxel.shape, *pbr_voxel.spatial_shape]),
+            grid=((pos[mask] + 0.5) * resolution).reshape(1, -1, 3),
+            mode='trilinear',
+        )
+        
+        # construct mesh
+        mask = mask.cpu().numpy()
+        base_color = np.clip(attrs[..., self.pbr_attr_layout['base_color']].cpu().numpy() * 255, 0, 255).astype(np.uint8)
+        metallic = np.clip(attrs[..., self.pbr_attr_layout['metallic']].cpu().numpy() * 255, 0, 255).astype(np.uint8)
+        roughness = np.clip(attrs[..., self.pbr_attr_layout['roughness']].cpu().numpy() * 255, 0, 255).astype(np.uint8)
+        alpha = np.clip(attrs[..., self.pbr_attr_layout['alpha']].cpu().numpy() * 255, 0, 255).astype(np.uint8)
+        
+        # extend
+        mask = (~mask).astype(np.uint8)
+        base_color = cv2.inpaint(base_color, mask, 3, cv2.INPAINT_TELEA)
+        metallic = cv2.inpaint(metallic, mask, 1, cv2.INPAINT_TELEA)[..., None]
+        roughness = cv2.inpaint(roughness, mask, 1, cv2.INPAINT_TELEA)[..., None]
+        alpha = cv2.inpaint(alpha, mask, 1, cv2.INPAINT_TELEA)[..., None]
+        
+        baseColorTexture = Image.fromarray(np.concatenate([base_color, alpha], axis=-1))
+        metallicRoughnessTexture = Image.fromarray(np.concatenate([np.zeros_like(metallic), roughness, metallic], axis=-1))
+        
+        material = trimesh.visual.material.PBRMaterial(
+            baseColorTexture=baseColorTexture,
+            baseColorFactor=np.array([255, 255, 255, 255], dtype=np.uint8),
+            metallicRoughnessTexture=metallicRoughnessTexture,
+            metallicFactor=1.0,
+            roughnessFactor=1.0,
+            alphaMode=texture_alpha_mode,
+            doubleSided=True,
+        )
+
+        # Swap Y and Z axes, invert Y (common conversion for GLB compatibility)
+        vertices[:, 1], vertices[:, 2] = vertices[:, 2], -vertices[:, 1]
+        normals[:, 1], normals[:, 2] = normals[:, 2], -normals[:, 1]
+        uvs[:, 1] = 1 - uvs[:, 1] # Flip UV V-coordinate
+        
+        textured_mesh = trimesh.Trimesh(
+            vertices=vertices,
+            faces=faces,
+            vertex_normals=normals,
+            process=False,
+            visual=trimesh.visual.TextureVisuals(uv=uvs, material=material)
+        )
+        
+        return textured_mesh, baseColorTexture, metallicRoughnessTexture
+
+    @torch.no_grad()
+    def texture_mesh(
+        self,
+        mesh: trimesh.Trimesh,
+        image: Image.Image,
+        seed: int = 42,
+        tex_slat_sampler_params: dict = {},
+        resolution: int = 1024,
+        texture_size: int = 2048,
+        texture_alpha_mode = 'OPAQUE',
+        double_side_material = True
+    ):
+        mesh = self.preprocess_mesh(mesh)
+        torch.manual_seed(seed)
+        
+        self.load_image_cond_model()        
+        cond = self.get_cond(image, resolution)
+        
+        if not self.keep_models_loaded:
+            self.unload_image_cond_model()
+        
+        shape_slat = self.encode_shape_slat(mesh, resolution)
+        
+        if resolution==512:
+            self.unload_tex_slat_flow_model_1024()
+            self.load_tex_slat_flow_model_512()
+            tex_model = self.models['tex_slat_flow_model_512']
+            
+            tex_slat = self.sample_tex_slat(
+                cond, tex_model,
+                shape_slat, tex_slat_sampler_params
+            )
+            
+            if not self.keep_models_loaded:
+                self.unload_tex_slat_flow_model_512()
+        else:
+            self.unload_tex_slat_flow_model_512()
+            self.load_tex_slat_flow_model_1024()
+            tex_model = self.models['tex_slat_flow_model_1024']
+            
+            tex_slat = self.sample_tex_slat(
+                cond, tex_model,
+                shape_slat, tex_slat_sampler_params
+            )
+            
+            if not self.keep_models_loaded:
+                self.unload_shape_slat_flow_model_1024()
+
+        torch.cuda.empty_cache()
+        pbr_voxel = self.decode_tex_slat(tex_slat)
+        torch.cuda.empty_cache()
+        
+        out_mesh, baseColorTexture, metallicRoughnessTexture = self.postprocess_mesh(mesh, pbr_voxel, resolution, texture_size, texture_alpha_mode, double_side_material)
+        return out_mesh, baseColorTexture, metallicRoughnessTexture

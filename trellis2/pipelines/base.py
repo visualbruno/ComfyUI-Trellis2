@@ -46,6 +46,8 @@ class Pipeline:
             # except Exception as e:
                 # _models[k] = models.from_pretrained(v)
 
+        _models['shape_slat_encoder'] = None
+
         new_pipeline = cls(_models)
         new_pipeline._pretrained_args = args
         return new_pipeline

@@ -31,6 +31,8 @@ from .trellis2.pipelines import Trellis2ImageTo3DPipeline
 script_directory = os.path.dirname(os.path.abspath(__file__))
 comfy_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 
+to_pil = transforms.ToPILImage()
+
 def pil2tensor(image):
     return torch.from_numpy(np.array(image).astype(np.float32) / 255.0)[None,]
     
@@ -54,7 +56,7 @@ def tensor2pil(image: torch.Tensor) -> Image.Image:
         arr = (t.numpy() * 255.0).clip(0, 255).astype(np.uint8)
         return Image.fromarray(arr)
 
-    raise TypeError(f"tensor2pil expected torch.Tensor, got {type(image)}")
+    raise TypeError(f"tensor2pil expected torch.Tensor, got {type(image)}")    
     
 def tensor_batch_to_pil_list(images: torch.Tensor, max_views: int = 4) -> list[Image.Image]:
     """
@@ -1082,7 +1084,78 @@ class Trellis2Remesh:
         del cumesh
         gc.collect()          
                 
-        return (mesh,)        
+        return (mesh,)
+        
+class Trellis2MeshTexturing:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "pipeline": ("TRELLIS2PIPELINE",),
+                "image": ("IMAGE",),
+                "trimesh": ("TRIMESH",),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0x7fffffff}),
+                "texture_steps": ("INT",{"default":12, "min":1, "max":100},),
+                "texture_guidance_strength": ("FLOAT",{"default":1.0}),
+                "texture_guidance_rescale": ("FLOAT",{"default":0.0}),
+                "texture_rescale_t": ("FLOAT",{"default":3.0}),
+                "resolution": ([512,1024],{"default":1024}),
+                "texture_size": ("INT",{"default":2048,"min":512,"max":16384}),
+                "texture_alpha_mode": (["OPAQUE","MASK","BLEND"],{"default":"OPAQUE"}),
+                "double_side_material": ("BOOLEAN",{"default":True}),                
+            },
+        }
+
+    RETURN_TYPES = ("TRIMESH","IMAGE","IMAGE",)
+    RETURN_NAMES = ("trimesh","base_color_texture","metallic_roughness_texture",)
+    FUNCTION = "process"
+    CATEGORY = "Trellis2Wrapper"
+    OUTPUT_NODE = True
+
+    def process(self, pipeline, image, trimesh, seed, texture_steps, texture_guidance_strength, texture_guidance_rescale, texture_rescale_t, resolution, texture_size, texture_alpha_mode, double_side_material):
+        #image = tensor2pil_v2(image)
+        image = tensor2pil(image)
+        tex_slat_sampler_params = {"steps":texture_steps,"guidance_strength":texture_guidance_strength,"guidance_rescale":texture_guidance_rescale,"rescale_t":texture_rescale_t}
+
+        textured_mesh, baseColorTexture_np, metallicRoughnessTexture_np = pipeline.texture_mesh(mesh=trimesh, 
+            image=image, 
+            seed=seed, 
+            tex_slat_sampler_params = tex_slat_sampler_params,
+            resolution = resolution,
+            texture_size = texture_size,
+            texture_alpha_mode = texture_alpha_mode,
+            double_side_material = double_side_material
+        )
+            
+
+        baseColorTexture = pil2tensor(baseColorTexture_np)
+        metallicRoughnessTexture = pil2tensor(metallicRoughnessTexture_np)
+        
+        return (textured_mesh, baseColorTexture, metallicRoughnessTexture, )
+        
+class Trellis2LoadMesh:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "glb_path": ("STRING", {"default": "", "tooltip": "The glb path with mesh to load."}), 
+            }
+        }
+    RETURN_TYPES = ("TRIMESH",)
+    RETURN_NAMES = ("trimesh",)
+    OUTPUT_TOOLTIPS = ("The glb model with mesh to texturize.",)
+    
+    FUNCTION = "load"
+    CATEGORY = "Trellis2Wrapper"
+    DESCRIPTION = "Loads a glb model from the given path."
+
+    def load(self, glb_path):
+        if not os.path.exists(glb_path):
+            glb_path = os.path.join(folder_paths.get_input_directory(), glb_path)
+        
+        trimesh = Trimesh.load(glb_path, force="mesh")
+        
+        return (trimesh,)        
 
 NODE_CLASS_MAPPINGS = {
     "Trellis2LoadModel": Trellis2LoadModel,
@@ -1096,6 +1169,8 @@ NODE_CLASS_MAPPINGS = {
     "Trellis2MeshWithVoxelAdvancedGenerator": Trellis2MeshWithVoxelAdvancedGenerator,
     "Trellis2PostProcessAndUnWrapAndRasterizer": Trellis2PostProcessAndUnWrapAndRasterizer,
     "Trellis2Remesh": Trellis2Remesh,
+    "Trellis2MeshTexturing": Trellis2MeshTexturing,
+    "Trellis2LoadMesh": Trellis2LoadMesh,
     }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1110,4 +1185,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Trellis2MeshWithVoxelAdvancedGenerator": "Trellis2 - Mesh With Voxel Advanced Generator",
     "Trellis2PostProcessAndUnWrapAndRasterizer": "Trellis2 - Post Process/UnWrap and Rasterize",
     "Trellis2Remesh": "Trellis2 - Remesh",
+    "Trellis2MeshTexturing": "Trellis2 - Mesh Texturing",
+    "Trellis2LoadMesh": "Trellis2 - Load Mesh",
     }
