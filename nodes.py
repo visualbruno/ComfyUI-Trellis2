@@ -13,6 +13,7 @@ import node_helpers
 import hashlib
 import cv2
 import gc
+import copy
 
 import cumesh as CuMesh
 
@@ -332,14 +333,15 @@ class Trellis2SimplifyMesh:
     OUTPUT_NODE = True
 
     def process(self, mesh, target_face_num, method):        
+        mesh_copy = copy.deepcopy(mesh)
         if method=="Cumesh":
-            mesh.simplify_with_cumesh(target = target_face_num)
+            mesh_copy.simplify_with_cumesh(target = target_face_num)
         elif method=="Meshlib":
-            mesh.simplify_with_meshlib(target = target_face_num)
+            mesh_copy.simplify_with_meshlib(target = target_face_num)
         else:
             raise Exception("Unknown simplification method")             
         
-        return (mesh,)          
+        return (mesh_copy,)          
         
 class Trellis2MeshWithVoxelToTrimesh:
     @classmethod
@@ -414,7 +416,8 @@ class Trellis2PostProcessMesh:
                 "repair_non_manifold_edges": ("BOOLEAN", {"default":True}),
                 "remove_non_manifold_faces": ("BOOLEAN", {"default":True}),
                 "remove_small_connected_components": ("BOOLEAN", {"default":True}),
-                "remove_small_connected_components_size": ("FLOAT", {"default":0.00001,"min":0.00001,"max":9.99999,"step":0.00001}),                
+                "remove_small_connected_components_size": ("FLOAT", {"default":0.00001,"min":0.00001,"max":9.99999,"step":0.00001}),
+                "unify_faces_orientation": ("BOOLEAN", {"default":True}),
             },
         }
 
@@ -424,9 +427,11 @@ class Trellis2PostProcessMesh:
     CATEGORY = "Trellis2Wrapper"
     OUTPUT_NODE = True
 
-    def process(self, mesh, fill_holes, fill_holes_max_perimeter, remove_duplicate_faces, repair_non_manifold_edges, remove_non_manifold_faces, remove_small_connected_components, remove_small_connected_components_size):
-        vertices = mesh.vertices
-        faces = mesh.faces
+    def process(self, mesh, fill_holes, fill_holes_max_perimeter, remove_duplicate_faces, repair_non_manifold_edges, remove_non_manifold_faces, remove_small_connected_components, remove_small_connected_components_size,unify_faces_orientation):
+        mesh_copy = copy.deepcopy(mesh)
+        
+        vertices = mesh_copy.vertices
+        faces = mesh_copy.faces
 
         # Move data to GPU
         vertices = vertices.cuda()
@@ -457,19 +462,22 @@ class Trellis2PostProcessMesh:
             print('Removing small connected components ...')
             cumesh.remove_small_connected_components(remove_small_connected_components_size)        
         
-        print(f"After initial cleanup: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")                                   
+        if unify_faces_orientation:
+            print('Unifying faces orientation ...')
+            cumesh.unify_face_orientations()
         
-        cumesh.unify_face_orientations()        
+        print(f"After initial cleanup: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")                                   
+                
         
         new_vertices, new_faces = cumesh.read()
         
-        mesh.vertices = new_vertices.to(mesh.device)
-        mesh.faces = new_faces.to(mesh.device) 
+        mesh_copy.vertices = new_vertices.to(mesh_copy.device)
+        mesh_copy.faces = new_faces.to(mesh_copy.device) 
         
         del cumesh
-        gc.collect()          
+        gc.collect()     
                 
-        return (mesh,)
+        return (mesh_copy,)
        
 class Trellis2UnWrapAndRasterizer:
     @classmethod
@@ -494,14 +502,16 @@ class Trellis2UnWrapAndRasterizer:
     OUTPUT_NODE = True
 
     def process(self, mesh, mesh_cluster_threshold_cone_half_angle_rad, mesh_cluster_refine_iterations, mesh_cluster_global_iterations, mesh_cluster_smooth_strength, texture_size, texture_alpha_mode, double_side_material):
+        mesh_copy = copy.deepcopy(mesh)
+        
         aabb = [[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]]
         
-        vertices = mesh.vertices
-        faces = mesh.faces
-        attr_volume = mesh.attrs
-        coords = mesh.coords
-        attr_layout = mesh.layout
-        voxel_size = mesh.voxel_size  
+        vertices = mesh_copy.vertices
+        faces = mesh_copy.faces
+        attr_volume = mesh_copy.attrs
+        coords = mesh_copy.coords
+        attr_layout = mesh_copy.layout
+        voxel_size = mesh_copy.voxel_size  
         
         mesh_cluster_threshold_cone_half_angle_rad = np.radians(mesh_cluster_threshold_cone_half_angle_rad)
 
@@ -752,14 +762,16 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
     OUTPUT_NODE = True
 
     def process(self, mesh, mesh_cluster_threshold_cone_half_angle_rad, mesh_cluster_refine_iterations, mesh_cluster_global_iterations, mesh_cluster_smooth_strength, texture_size, remesh, remesh_band, remesh_project, target_face_num, simplify_method, fill_holes, fill_holes_max_perimeter, texture_alpha_mode, dual_contouring_resolution):
+        mesh_copy = copy.deepcopy(mesh)
+        
         aabb = [[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]]
         
-        vertices = mesh.vertices
-        faces = mesh.faces
-        attr_volume = mesh.attrs
-        coords = mesh.coords
-        attr_layout = mesh.layout
-        voxel_size = mesh.voxel_size  
+        vertices = mesh_copy.vertices
+        faces = mesh_copy.faces
+        attr_volume = mesh_copy.attrs
+        coords = mesh_copy.coords
+        attr_layout = mesh_copy.layout
+        voxel_size = mesh_copy.voxel_size  
         
         mesh_cluster_threshold_cone_half_angle_rad = np.radians(mesh_cluster_threshold_cone_half_angle_rad)
 
@@ -1001,14 +1013,16 @@ class Trellis2Remesh:
     OUTPUT_NODE = True
 
     def process(self, mesh, remesh_band, remesh_project, fill_holes, fill_holes_max_perimeter, dual_contouring_resolution):
+        mesh_copy = copy.deepcopy(mesh)
+        
         aabb = [[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]]
         
-        vertices = mesh.vertices
-        faces = mesh.faces
-        attr_volume = mesh.attrs
-        coords = mesh.coords
-        attr_layout = mesh.layout
-        voxel_size = mesh.voxel_size        
+        vertices = mesh_copy.vertices
+        faces = mesh_copy.faces
+        attr_volume = mesh_copy.attrs
+        coords = mesh_copy.coords
+        attr_layout = mesh_copy.layout
+        voxel_size = mesh_copy.voxel_size        
         
         # --- Input Normalization (AABB, Voxel Size, Grid Size) ---
         if isinstance(aabb, (list, tuple)):
@@ -1081,17 +1095,17 @@ class Trellis2Remesh:
         print(f"After remeshing: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")                          
         
         # Step 2: Unify face orientations
-        cumesh.unify_face_orientations()        
+        #cumesh.unify_face_orientations()        
         
         new_vertices, new_faces = cumesh.read()
         
-        mesh.vertices = new_vertices.to(mesh.device)
-        mesh.faces = new_faces.to(mesh.device) 
+        mesh_copy.vertices = new_vertices.to(mesh_copy.device)
+        mesh_copy.faces = new_faces.to(mesh_copy.device) 
         
         del cumesh
         gc.collect()          
                 
-        return (mesh,)
+        return (mesh_copy,)
         
 class Trellis2MeshTexturing:
     @classmethod
@@ -1272,7 +1286,73 @@ class Trellis2MeshRefiner:
         
         mesh = pipeline.refine_mesh(mesh = trimesh, image=image, seed=seed, shape_slat_sampler_params = shape_slat_sampler_params, tex_slat_sampler_params = tex_slat_sampler_params, resolution = resolution, max_num_tokens = max_num_tokens, generate_texture_slat=generate_texture_slat)[0]         
         
-        return (mesh,)           
+        return (mesh,)
+
+class Trellis2PostProcess2:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "mesh": ("MESHWITHVOXEL",),
+                "fill_holes": ("BOOLEAN", {"default":True}),
+                "fill_holes_max_perimeter": ("FLOAT",{"default":0.03,"min":0.001,"max":99.999,"step":0.001}),
+                "fix_face_orientation": ("BOOLEAN", {"default":True}),
+                "remove_duplicate_faces": ("BOOLEAN",{"default":True}),               
+            },
+        }
+
+    RETURN_TYPES = ("MESHWITHVOXEL",)
+    RETURN_NAMES = ("mesh",)
+    FUNCTION = "process"
+    CATEGORY = "Trellis2Wrapper"
+    OUTPUT_NODE = True
+
+    def process(self, mesh, fill_holes, fill_holes_max_perimeter, fix_face_orientation, remove_duplicate_faces):
+        mesh_copy = copy.deepcopy(mesh)
+        
+        vertices_np = mesh_copy.vertices.cpu().numpy()
+        faces_np = mesh_copy.faces.cpu().numpy()
+        
+        trimesh = Trimesh.Trimesh(vertices=vertices_np,faces=faces_np)
+        
+        print(f"Initial mesh: {len(trimesh.faces)} faces")
+        print(f"Is winding consistent? {trimesh.is_winding_consistent}")        
+        
+        if fix_face_orientation:
+            # 2. Fix the normals
+            # This aligns the winding of all faces to be consistent
+            print('Fixing normals ...')
+            trimesh.fix_normals()
+
+            # 3. Handle inverted orientations
+            # If the mesh is "inside out" (normals pointing inward), 
+            # this attempts to flip them to point outward based on the mesh volume.
+            if trimesh.is_watertight:
+                print('Mesh is watertight, fixing inversion ...')
+                Trimesh.repair.fix_inversion(trimesh)   
+
+        # 4. Optional: General Cleanup
+        # AI meshes often have duplicate vertices or degenerate faces
+        if remove_duplicate_faces:
+            print('Removing duplicate faces ...')
+            trimesh.remove_duplicate_faces()
+            
+        trimesh.remove_infinite_values()
+        
+        if fill_holes:
+            print('Filling holes ...')
+            trimesh.fill_holes()  
+        
+        new_vertices = torch.from_numpy(trimesh.vertices).float()
+        new_faces = torch.from_numpy(trimesh.faces).int()                
+        
+        mesh_copy.vertices = new_vertices.to(mesh_copy.device)
+        mesh_copy.faces = new_faces.to(mesh_copy.device) 
+        
+        del trimesh
+        gc.collect()
+                
+        return (mesh_copy,)        
 
 NODE_CLASS_MAPPINGS = {
     "Trellis2LoadModel": Trellis2LoadModel,
@@ -1290,6 +1370,7 @@ NODE_CLASS_MAPPINGS = {
     "Trellis2LoadMesh": Trellis2LoadMesh,
     "Trellis2PreProcessImage": Trellis2PreProcessImage,
     "Trellis2MeshRefiner": Trellis2MeshRefiner,
+    "Trellis2PostProcess2": Trellis2PostProcess2,
     }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1308,4 +1389,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Trellis2LoadMesh": "Trellis2 - Load Mesh",
     "Trellis2PreProcessImage": "Trellis2 - PreProcess Image",
     "Trellis2MeshRefiner": "Trellis2 - Mesh Refiner",
+    "Trellis2PostProcess2": "Trellis2 - PostProcess Mesh 2",
     }
