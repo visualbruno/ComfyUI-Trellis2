@@ -18,6 +18,7 @@ import copy
 import pymeshlab
 
 import cumesh as CuMesh
+import o_voxel
 
 import meshlib.mrmeshnumpy as mrmeshnumpy
 import meshlib.mrmeshpy as mrmeshpy
@@ -164,6 +165,8 @@ class Trellis2LoadModel:
     def process(self, modelname, backend, device, low_vram, keep_models_loaded):
         os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
         os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"  # Can save GPU memory
+        os.environ["FLEX_GEMM_AUTOTUNE_CACHE_PATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'autotune_cache.json')
+        os.environ["FLEX_GEMM_AUTOTUNER_VERBOSE"] = '1'        
         os.environ['ATTN_BACKEND'] = backend
         
         torch.backends.cudnn.benchmark = False
@@ -1042,6 +1045,7 @@ class Trellis2Remesh:
                 "fill_holes": ("BOOLEAN", {"default":True}),
                 "fill_holes_max_perimeter": ("FLOAT",{"default":0.03,"min":0.001,"max":99.999,"step":0.001}),
                 "dual_contouring_resolution": (["Auto","128","256","512","1024","2048"],{"default":"Auto"}),
+                "remove_floaters": ("BOOLEAN",{"default":True}),
             },
         }
 
@@ -1051,8 +1055,11 @@ class Trellis2Remesh:
     CATEGORY = "Trellis2Wrapper"
     OUTPUT_NODE = True
 
-    def process(self, mesh, remesh_band, remesh_project, fill_holes, fill_holes_max_perimeter, dual_contouring_resolution):
+    def process(self, mesh, remesh_band, remesh_project, fill_holes, fill_holes_max_perimeter, dual_contouring_resolution, remove_floaters):
         mesh_copy = copy.deepcopy(mesh)
+        
+        if remove_floaters:
+            mesh_copy = remove_floater(mesh_copy)
         
         aabb = [[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]]
         
@@ -1334,9 +1341,10 @@ class Trellis2PostProcess2:
             "required": {
                 "mesh": ("MESHWITHVOXEL",),
                 "fill_holes": ("BOOLEAN", {"default":True}),
-                "fill_holes_max_perimeter": ("FLOAT",{"default":0.03,"min":0.001,"max":99.999,"step":0.001}),
+                "fix_normals": ("BOOLEAN", {"default":False}),
                 "fix_face_orientation": ("BOOLEAN", {"default":True}),
-                "remove_duplicate_faces": ("BOOLEAN",{"default":True}),               
+                "remove_duplicate_faces": ("BOOLEAN",{"default":True}),
+                "remove_infinite_values": ("BOOLEAN",{"default":True}),
             },
         }
 
@@ -1346,7 +1354,7 @@ class Trellis2PostProcess2:
     CATEGORY = "Trellis2Wrapper"
     OUTPUT_NODE = True
 
-    def process(self, mesh, fill_holes, fill_holes_max_perimeter, fix_face_orientation, remove_duplicate_faces):
+    def process(self, mesh, fill_holes, fix_normals, fix_face_orientation, remove_duplicate_faces, remove_infinite_values):
         mesh_copy = copy.deepcopy(mesh)
         
         vertices_np = mesh_copy.vertices.cpu().numpy()
@@ -1357,26 +1365,24 @@ class Trellis2PostProcess2:
         print(f"Initial mesh: {len(trimesh.faces)} faces")
         print(f"Is winding consistent? {trimesh.is_winding_consistent}")        
         
-        if fix_face_orientation:
-            # 2. Fix the normals
-            # This aligns the winding of all faces to be consistent
+        if fix_normals:
             print('Fixing normals ...')
-            trimesh.fix_normals()
-
-            # 3. Handle inverted orientations
-            # If the mesh is "inside out" (normals pointing inward), 
-            # this attempts to flip them to point outward based on the mesh volume.
+            trimesh.fix_normals()       
+            
+        if fix_face_orientation:
             if trimesh.is_watertight:
                 print('Mesh is watertight, fixing inversion ...')
-                Trimesh.repair.fix_inversion(trimesh)   
+                Trimesh.repair.fix_inversion(trimesh)
+            else:
+                print('Mesh is not watertight, cannot fix inversion')
 
-        # 4. Optional: General Cleanup
-        # AI meshes often have duplicate vertices or degenerate faces
         if remove_duplicate_faces:
             print('Removing duplicate faces ...')
             trimesh.remove_duplicate_faces()
-            
-        trimesh.remove_infinite_values()
+        
+        if remove_infinite_values:
+            print('Removing infinite values ...')
+            trimesh.remove_infinite_values()
         
         if fill_holes:
             print('Filling holes ...')
@@ -1391,7 +1397,46 @@ class Trellis2PostProcess2:
         del trimesh
         gc.collect()
                 
-        return (mesh_copy,)        
+        return (mesh_copy,)    
+
+class Trellis2OvoxelExportToGLB:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "mesh": ("MESHWITHVOXEL",),
+                "resolution": ([512,1024],{"default":1024}),
+                "texture_size": ([512,1024,2048,4096],{"default":2048}),
+                "target_face_num": ("INT",{"default":2000000,"min":500,"max":16000000}),
+            },
+        }
+
+    RETURN_TYPES = ("TRIMESH",)
+    RETURN_NAMES = ("trimesh",)
+    FUNCTION = "process"
+    CATEGORY = "Trellis2Wrapper"
+    OUTPUT_NODE = True
+
+    def process(self, mesh, resolution, texture_size, target_face_num):
+        mesh_copy = copy.deepcopy(mesh)
+
+        glb = o_voxel.postprocess.to_glb(
+            vertices=mesh_copy.vertices,
+            faces=mesh_copy.faces,
+            attr_volume=mesh_copy.attrs,
+            coords=mesh_copy.coords,
+            attr_layout=mesh_copy.layout,
+            grid_size=resolution,
+            aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+            decimation_target=target_face_num,
+            texture_size=texture_size,
+            remesh=True,
+            remesh_band=1,
+            remesh_project=0,
+            use_tqdm=True,
+        )
+                
+        return (glb,)        
 
 NODE_CLASS_MAPPINGS = {
     "Trellis2LoadModel": Trellis2LoadModel,
@@ -1410,6 +1455,7 @@ NODE_CLASS_MAPPINGS = {
     "Trellis2PreProcessImage": Trellis2PreProcessImage,
     "Trellis2MeshRefiner": Trellis2MeshRefiner,
     "Trellis2PostProcess2": Trellis2PostProcess2,
+    "Trellis2OvoxelExportToGLB": Trellis2OvoxelExportToGLB,
     }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1429,4 +1475,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Trellis2PreProcessImage": "Trellis2 - PreProcess Image",
     "Trellis2MeshRefiner": "Trellis2 - Mesh Refiner",
     "Trellis2PostProcess2": "Trellis2 - PostProcess Mesh 2",
+    "Trellis2OvoxelExportToGLB": "Trellis2 - Ovoxel Export to GLB",
     }

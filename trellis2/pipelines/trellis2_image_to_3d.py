@@ -1001,7 +1001,9 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         """
         Preprocess the input mesh.
         """
-        vertices = mesh.vertices
+        mesh = mesh.copy()
+        vertices = mesh.vertices.copy()
+        
         vertices_min = vertices.min(axis=0)
         vertices_max = vertices.max(axis=0)
         center = (vertices_min + vertices_max) / 2
@@ -1011,7 +1013,9 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         vertices[:, 1] = -vertices[:, 2]
         vertices[:, 2] = tmp
         assert np.all(vertices >= -0.5) and np.all(vertices <= 0.5), 'vertices out of range'
-        return trimesh.Trimesh(vertices=vertices, faces=mesh.faces, process=False)
+        
+        mesh.vertices = vertices
+        return mesh
 
     def encode_shape_slat(
         self,
@@ -1069,9 +1073,11 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         texture_alpha_mode = 'OPAQUE',
         double_side_material = True
     ):
+        
         vertices = mesh.vertices
         faces = mesh.faces
-        normals = mesh.vertex_normals
+        normals = np.asarray(mesh.vertex_normals).copy()
+        
         vertices_torch = torch.from_numpy(vertices).float().cuda()
         faces_torch = torch.from_numpy(faces).int().cuda()
         if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'uv') and mesh.visual.uv is not None:
