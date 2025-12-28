@@ -160,7 +160,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         
         if self.models['sparse_structure_decoder'] is None:            
             self.models['sparse_structure_decoder'] = models.from_pretrained(self._pretrained_args['models']['sparse_structure_decoder'])
-            self.models['sparse_structure_flow_model'].eval()        
+            self.models['sparse_structure_decoder'].eval()        
             self.models['sparse_structure_decoder'].to(self._device)
     
     def unload_sparse_structure_model(self):
@@ -1259,10 +1259,19 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         if not self.keep_models_loaded:
             self.unload_shape_slat_decoder()
         
+        downsampling = 16
+        lr_resolution = hr_resolution
+        # if hr_resolution == 512:
+            # downsampling = 16
+        # elif hr_resolution == 1024:
+            # downsampling = 32
+        # elif hr_resolution == 1536:
+            # downsampling = 32
+        
         while True:
             quant_coords = torch.cat([
                 hr_coords[:, :1],
-                ((hr_coords[:, 1:] + 0.5) / hr_resolution * (hr_resolution // 16)).int(),
+                ((hr_coords[:, 1:] + 0.5) / 512 * (lr_resolution // downsampling)).int(),
             ], dim=1)
             coords = quant_coords.unique(dim=0)
             num_tokens = coords.shape[0]
