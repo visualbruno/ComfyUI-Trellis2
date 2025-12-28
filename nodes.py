@@ -165,8 +165,8 @@ class Trellis2LoadModel:
     def process(self, modelname, backend, device, low_vram, keep_models_loaded):
         os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
         os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"  # Can save GPU memory
-        os.environ["FLEX_GEMM_AUTOTUNE_CACHE_PATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'autotune_cache.json')
-        os.environ["FLEX_GEMM_AUTOTUNER_VERBOSE"] = '1'        
+        #os.environ["FLEX_GEMM_AUTOTUNE_CACHE_PATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'autotune_cache.json')
+        #os.environ["FLEX_GEMM_AUTOTUNER_VERBOSE"] = '1'        
         os.environ['ATTN_BACKEND'] = backend
         
         torch.backends.cudnn.benchmark = False
