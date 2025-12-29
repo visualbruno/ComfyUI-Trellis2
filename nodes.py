@@ -733,6 +733,12 @@ class Trellis2MeshWithVoxelAdvancedGenerator:
                 "max_views": ("INT", {"default": 4, "min": 1, "max": 16}),
                 "sparse_structure_resolution": ("INT", {"default":32,"min":8,"max":64,"step":8}),
                 "generate_texture_slat": ("BOOLEAN", {"default":True}),
+                "sparse_structure_guidance_interval_start": ("FLOAT",{"default":0.3,"min":0.0,"max":1.0}),
+                "sparse_structure_guidance_interval_end": ("FLOAT",{"default":1.0,"min":0.0,"max":1.0}),
+                "shape_guidance_interval_start": ("FLOAT",{"default":0.3,"min":0.0,"max":1.0}),
+                "shape_guidance_interval_end": ("FLOAT",{"default":1.0,"min":0.0,"max":1.0}),
+                "texture_guidance_interval_start": ("FLOAT",{"default":0.6,"min":0.0,"max":1.0}),
+                "texture_guidance_interval_end": ("FLOAT",{"default":0.9,"min":0.0,"max":1.0}),
             },
         }
 
@@ -757,14 +763,24 @@ class Trellis2MeshWithVoxelAdvancedGenerator:
         max_num_tokens,
         max_views,
         sparse_structure_resolution,
-        generate_texture_slat):
+        generate_texture_slat,
+        sparse_structure_guidance_interval_start,
+        sparse_structure_guidance_interval_end,
+        shape_guidance_interval_start,
+        shape_guidance_interval_end,
+        texture_guidance_interval_start,
+        texture_guidance_interval_end):
 
         images = tensor_batch_to_pil_list(image, max_views=max_views)
         image_in = images[0] if len(images) == 1 else images
         
-        sparse_structure_sampler_params = {"steps":sparse_structure_steps,"guidance_strength":sparse_structure_guidance_strength,"guidance_rescale":sparse_structure_guidance_rescale,"rescale_t":sparse_structure_rescale_t}        
-        shape_slat_sampler_params = {"steps":shape_steps,"guidance_strength":shape_guidance_strength,"guidance_rescale":shape_guidance_rescale,"rescale_t":shape_rescale_t}       
-        tex_slat_sampler_params = {"steps":texture_steps,"guidance_strength":texture_guidance_strength,"guidance_rescale":texture_guidance_rescale,"rescale_t":texture_rescale_t}
+        sparse_structure_guidance_interval = [sparse_structure_guidance_interval_start,sparse_structure_guidance_interval_end]
+        shape_guidance_interval = [shape_guidance_interval_start,shape_guidance_interval_end]
+        texture_guidance_interval = [texture_guidance_interval_start,texture_guidance_interval_end]
+        
+        sparse_structure_sampler_params = {"steps":sparse_structure_steps,"guidance_strength":sparse_structure_guidance_strength,"guidance_rescale":sparse_structure_guidance_rescale,"guidance_interval":sparse_structure_guidance_interval,"rescale_t":sparse_structure_rescale_t}        
+        shape_slat_sampler_params = {"steps":shape_steps,"guidance_strength":shape_guidance_strength,"guidance_rescale":shape_guidance_rescale,"guidance_interval":shape_guidance_interval,"rescale_t":shape_rescale_t}       
+        tex_slat_sampler_params = {"steps":texture_steps,"guidance_strength":texture_guidance_strength,"guidance_rescale":texture_guidance_rescale,"guidance_interval":texture_guidance_interval,"rescale_t":texture_rescale_t}
         
         mesh = pipeline.run(image=image_in, seed=seed, pipeline_type=pipeline_type, sparse_structure_sampler_params = sparse_structure_sampler_params, shape_slat_sampler_params = shape_slat_sampler_params, tex_slat_sampler_params = tex_slat_sampler_params, max_num_tokens = max_num_tokens, sparse_structure_resolution = sparse_structure_resolution, max_views = max_views, generate_texture_slat=generate_texture_slat)[0]         
         
