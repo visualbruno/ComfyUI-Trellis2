@@ -1231,7 +1231,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         coords = torch.cat([torch.zeros_like(voxel_indices[:, 0:1]), voxel_indices], dim=-1)                
         coords = coords.cpu()
         
-        print(coords)
+        #print(coords)
         
         del voxel_indices
         del dual_vertices

@@ -31,6 +31,7 @@ from comfy.utils import load_torch_file, ProgressBar, common_upscale
 import comfy.utils
 
 from .trellis2.pipelines import Trellis2ImageTo3DPipeline
+from .trellis2.representations import Mesh, MeshWithVoxel
 
 script_directory = os.path.dirname(os.path.abspath(__file__))
 comfy_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -1474,7 +1475,71 @@ class Trellis2OvoxelExportToGLB:
             use_tqdm=True,
         )
                 
-        return (glb,)        
+        return (glb,)
+
+class Trellis2TrimeshToMeshWithVoxel:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "trimesh": ("TRIMESH",),
+                "resolution": ([512,1024],{"default":1024}),
+            },
+        }
+
+    RETURN_TYPES = ("MESHWITHVOXEL", )
+    RETURN_NAMES = ("mesh", )
+    FUNCTION = "process"
+    CATEGORY = "Trellis2Wrapper"
+    OUTPUT_NODE = True
+
+    def process(self, trimesh, resolution):       
+        mesh_copy = trimesh.copy()
+        
+        mvoxel = self.get_voxelmesh_from_trimesh(mesh_copy, resolution)
+        
+        return (mvoxel,)        
+        
+    def get_voxelmesh_from_trimesh(self, mesh, resolution):
+        vertices = torch.from_numpy(mesh.vertices).float()
+        faces = torch.from_numpy(mesh.faces).long()
+        
+        voxel_indices, dual_vertices, intersected = o_voxel.convert.mesh_to_flexible_dual_grid(
+            vertices.cpu(), faces.cpu(),
+            grid_size=resolution,
+            aabb=[[-0.5,-0.5,-0.5],[0.5,0.5,0.5]],
+            face_weight=1.0,
+            boundary_weight=0.2,
+            regularization_weight=1e-2,
+            timing=True,
+        )
+        
+        coords = torch.cat([torch.zeros_like(voxel_indices[:, 0:1]), voxel_indices], dim=-1)                
+        coords = coords.cpu()
+
+        del voxel_indices
+        del dual_vertices
+        del intersected
+        gc.collect()
+            
+        pbr_attr_layout = {
+            'base_color': slice(0, 3),
+            'metallic': slice(3, 4),
+            'roughness': slice(4, 5),
+            'alpha': slice(5, 6),
+        }
+
+        mvoxel = MeshWithVoxel(
+                    vertices, faces,
+                    origin = [-0.5, -0.5, -0.5],
+                    voxel_size = 1 / resolution,
+                    coords = coords,
+                    attrs = None,
+                    voxel_shape = None,
+                    layout=pbr_attr_layout
+                    )
+                    
+        return mvoxel
 
 NODE_CLASS_MAPPINGS = {
     "Trellis2LoadModel": Trellis2LoadModel,
@@ -1494,6 +1559,7 @@ NODE_CLASS_MAPPINGS = {
     "Trellis2MeshRefiner": Trellis2MeshRefiner,
     "Trellis2PostProcess2": Trellis2PostProcess2,
     "Trellis2OvoxelExportToGLB": Trellis2OvoxelExportToGLB,
+    "Trellis2TrimeshToMeshWithVoxel": Trellis2TrimeshToMeshWithVoxel,
     }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1514,4 +1580,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Trellis2MeshRefiner": "Trellis2 - Mesh Refiner",
     "Trellis2PostProcess2": "Trellis2 - PostProcess Mesh 2",
     "Trellis2OvoxelExportToGLB": "Trellis2 - Ovoxel Export to GLB",
+    "Trellis2TrimeshToMeshWithVoxel": "Trellis2 - Trimesh to Mesh with Voxel",
     }
