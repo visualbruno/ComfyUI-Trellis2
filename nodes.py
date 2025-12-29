@@ -864,13 +864,35 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
         print("Cleaning mesh...")        
         # --- Branch 1: Standard Pipeline (Simplification & Cleaning) ---
         if not remesh:            
-            # Step 1: Clean up topology (duplicates, non-manifolds, isolated parts)
+            if simplify_method == 'Cumesh':
+                cumesh.simplify(target_face_num * 3, verbose=True)
+            elif simplify_method == 'Meshlib':
+                 # GPU -> CPU -> Meshlib -> CPU -> GPU
+                v, f = cumesh.read()
+                new_vertices, new_faces = simplify_with_meshlib(v.cpu().numpy(), f.cpu().numpy(), target_face_num)
+                cumesh.init(torch.from_numpy(new_vertices).float().cuda(), torch.from_numpy(new_faces).int().cuda())        
+            
             cumesh.remove_duplicate_faces()
             cumesh.repair_non_manifold_edges()
             cumesh.remove_small_connected_components(1e-5)
             
             if fill_holes:
                 cumesh.fill_holes(max_hole_perimeter=fill_holes_max_perimeter)
+            
+            if simplify_method == 'Cumesh':
+                cumesh.simplify(target_face_num, verbose=True)
+            elif simplify_method == 'Meshlib':
+                 # GPU -> CPU -> Meshlib -> CPU -> GPU
+                v, f = cumesh.read()
+                new_vertices, new_faces = simplify_with_meshlib(v.cpu().numpy(), f.cpu().numpy(), target_face_num)
+                cumesh.init(torch.from_numpy(new_vertices).float().cuda(), torch.from_numpy(new_faces).int().cuda())
+            
+            cumesh.remove_duplicate_faces()
+            cumesh.repair_non_manifold_edges()
+            cumesh.remove_small_connected_components(1e-5) 
+
+            if fill_holes:
+                cumesh.fill_holes(max_hole_perimeter=fill_holes_max_perimeter)            
             
             print(f"After initial cleanup: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")                            
                 
@@ -904,15 +926,15 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
             print(f"After remeshing: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")
             
             # Step 2: Unify face orientations
-            cumesh.unify_face_orientations()            
+            #cumesh.unify_face_orientations()            
 
-        if simplify_method == 'Cumesh':
-            cumesh.simplify(target_face_num, verbose=True)
-        elif simplify_method == 'Meshlib':
-             # GPU -> CPU -> Meshlib -> CPU -> GPU
-            v, f = cumesh.read()
-            new_vertices, new_faces = simplify_with_meshlib(v.cpu().numpy(), f.cpu().numpy(), target_face_num)
-            cumesh.init(torch.from_numpy(new_vertices).float().cuda(), torch.from_numpy(new_faces).int().cuda())
+            if simplify_method == 'Cumesh':
+                cumesh.simplify(target_face_num, verbose=True)
+            elif simplify_method == 'Meshlib':
+                 # GPU -> CPU -> Meshlib -> CPU -> GPU
+                v, f = cumesh.read()
+                new_vertices, new_faces = simplify_with_meshlib(v.cpu().numpy(), f.cpu().numpy(), target_face_num)
+                cumesh.init(torch.from_numpy(new_vertices).float().cuda(), torch.from_numpy(new_faces).int().cuda())
 
         print(f"After simplifying: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")            
         
@@ -1141,7 +1163,7 @@ class Trellis2Remesh:
         print(f"After remeshing: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")                          
         
         # Step 2: Unify face orientations
-        cumesh.unify_face_orientations()        
+        #cumesh.unify_face_orientations()        
         
         new_vertices, new_faces = cumesh.read()
         
