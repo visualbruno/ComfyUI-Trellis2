@@ -29,7 +29,7 @@ Documentation = "https://github.com/visualbruno/ComfyUI-Trellis2/wiki"
 "Bug Tracker" = "https://github.com/visualbruno/ComfyUI-Trellis2/issues"
 
 [tool.comfy]
-PublisherId = ""
+PublisherId = "visualbruno"
 DisplayName = "ComfyUI-Trellis2"
 Icon = ""
 includes = [] 
