@@ -579,7 +579,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             **lr_cond,
             **sampler_params,
             verbose=True,
-            tqdm_desc="Sampling shape SLat",
+            tqdm_desc="Sampling shape SLat (LR)",
         ).samples
         if self.low_vram:
             flow_model_lr.cpu()
@@ -641,7 +641,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             **cond,
             **sampler_params,
             verbose=True,
-            tqdm_desc="Sampling shape SLat",
+            tqdm_desc="Sampling shape SLat (HR)",
         ).samples
         if self.low_vram:
             flow_model.cpu()
@@ -662,6 +662,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         self,
         slat: SparseTensor,
         resolution: int,
+        use_tiled: bool = True,
     ) -> Tuple[List[Mesh], List[SparseTensor]]:
         """
         Decode the structured latent.
@@ -680,7 +681,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         if self.low_vram:
             self.models['shape_slat_decoder'].to(self.device)
             self.models['shape_slat_decoder'].low_vram = True
-        ret = self.models['shape_slat_decoder'](slat, return_subs=True)
+        ret = self.models['shape_slat_decoder'](slat, return_subs=True, useTiled=use_tiled)
         if self.low_vram:
             self.models['shape_slat_decoder'].cpu()
             self.models['shape_slat_decoder'].low_vram = False
@@ -782,6 +783,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         shape_slat: SparseTensor,
         tex_slat: SparseTensor,
         resolution: int,
+        use_tiled: bool = True,
     ) -> List[MeshWithVoxel]:
         """
         Decode the latent codes.
@@ -791,7 +793,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             tex_slat (SparseTensor): The structured latent for texture.
             resolution (int): The resolution of the output.
         """
-        meshes, subs = self.decode_shape_slat(shape_slat, resolution)
+        meshes, subs = self.decode_shape_slat(shape_slat, resolution, use_tiled=use_tiled)
         if self.low_vram:
             self._cleanup_cuda()                                                         
             
@@ -850,6 +852,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         sparse_structure_resolution: int = 32,
         max_views: int = 4,
         generate_texture_slat = True,
+        use_tiled: bool = True,
         pbar = None
     ) -> List[MeshWithVoxel]:
         """
@@ -1110,9 +1113,9 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             
         torch.cuda.empty_cache()
         if generate_texture_slat:
-            out_mesh = self.decode_latent(shape_slat, tex_slat, res)
+            out_mesh = self.decode_latent(shape_slat, tex_slat, res, use_tiled=use_tiled)
         else:
-            out_mesh = self.decode_latent(shape_slat, None, res)
+            out_mesh = self.decode_latent(shape_slat, None, res, use_tiled=use_tiled)
         torch.cuda.empty_cache()
         pbar.update(1)              
         if return_latent:
@@ -1214,7 +1217,16 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             _cumesh = cumesh.CuMesh()
             _cumesh.init(vertices_torch, faces_torch)
             print('Unwrapping mesh ...')
-            vertices_torch, faces_torch, uvs_torch, vmap = _cumesh.uv_unwrap(return_vmaps=True)
+            vertices_torch, faces_torch, uvs_torch, vmap = _cumesh.uv_unwrap(
+                compute_charts_kwargs={
+                    "threshold_cone_half_angle_rad": np.radians(90.0),
+                    "refine_iterations": 0,
+                    "global_iterations": 1,
+                    "smooth_strength": 1,
+                },
+                return_vmaps=True,
+                verbose=True,
+            )
             vertices_torch = vertices_torch.cuda()
             faces_torch = faces_torch.cuda()
             uvs_torch = uvs_torch.cuda()
@@ -1465,6 +1477,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         generate_texture_slat = True,
         return_latent = False,
         downsampling = 16,
+        use_tiled: bool = True,
     ):
         mesh = self.preprocess_mesh(mesh)
         torch.manual_seed(seed)
@@ -1562,9 +1575,9 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                 
         torch.cuda.empty_cache()
         if generate_texture_slat:
-            out_mesh = self.decode_latent(shape_slat, tex_slat, res)
+            out_mesh = self.decode_latent(shape_slat, tex_slat, res, use_tiled=use_tiled)
         else:
-            out_mesh = self.decode_latent(shape_slat, None, res)
+            out_mesh = self.decode_latent(shape_slat, None, res, use_tiled=use_tiled)
         torch.cuda.empty_cache()
         
         if return_latent:

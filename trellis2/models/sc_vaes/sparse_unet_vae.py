@@ -608,6 +608,7 @@ class SparseUnetVaeDecoder(nn.Module):
                         h = block(h, subdiv=guide_subs[i] if guide_subs is not None else None)
                 else:
                     h = block(h)
+            torch.cuda.empty_cache()                        
         if self.low_vram:
             def fused_finalize(t):
                 t = t.type(x.dtype)
