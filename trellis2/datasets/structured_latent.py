@@ -25,7 +25,7 @@ class SLatVisMixin:
         self.pretrained_slat_dec = pretrained_slat_dec
         self.slat_dec_path = slat_dec_path
         self.slat_dec_ckpt = slat_dec_ckpt
-        
+
     def _loading_slat_dec(self):
         if self.slat_dec is not None:
             return
@@ -58,7 +58,7 @@ class SLatVisMixin:
     def visualize_sample(self, x_0: Union[SparseTensor, dict]):
         x_0 = x_0 if isinstance(x_0, SparseTensor) else x_0['x_0']
         reps = self.decode_latent(x_0.cuda())
-        
+
         # Build camera
         yaws = [0, np.pi / 2, np.pi, 3 * np.pi / 2]
         yaws_offset = np.random.uniform(-np.pi / 4, np.pi / 4)
@@ -89,14 +89,14 @@ class SLatVisMixin:
                 image[:, 512 * (j // tile[1]):512 * (j // tile[1] + 1), 512 * (j % tile[1]):512 * (j % tile[1] + 1)] = res['color']
             images.append(image)
         images = torch.stack(images)
-            
+
         return images
-    
-    
+
+
 class SLat(SLatVisMixin, StandardDatasetBase):
     """
     structured latent V2 dataset
-    
+
     Args:
         roots (str): path to the dataset
         min_aesthetic_score (float): minimum aesthetic score
@@ -123,7 +123,7 @@ class SLat(SLatVisMixin, StandardDatasetBase):
         self.max_tokens = max_tokens
         self.latent_key = latent_key
         self.value_range = (0, 1)
-        
+
         super().__init__(
             roots,
             pretrained_slat_dec=pretrained_slat_dec,
@@ -132,11 +132,11 @@ class SLat(SLatVisMixin, StandardDatasetBase):
         )
 
         self.loads = [self.metadata.loc[sha256, f'{latent_key}_tokens'] for _, sha256 in self.instances]
-        
+
         if self.normalization is not None:
             self.mean = torch.tensor(self.normalization['mean']).reshape(1, -1)
             self.std = torch.tensor(self.normalization['std']).reshape(1, -1)
-      
+
     def filter_metadata(self, metadata):
         stats = {}
         metadata = metadata[metadata[f'{self.latent_key}_encoded'] == True]
@@ -157,7 +157,7 @@ class SLat(SLatVisMixin, StandardDatasetBase):
             'coords': coords,
             'feats': feats,
         }
-        
+
     @staticmethod
     def collate_fn(batch, split_size=None):
         if split_size is None:
@@ -185,7 +185,7 @@ class SLat(SLatVisMixin, StandardDatasetBase):
             )
             pack['x_0']._shape = torch.Size([len(group), *sub_batch[0]['feats'].shape[1:]])
             pack['x_0'].register_spatial_cache('layout', layout)
-            
+
             # collate other data
             keys = [k for k in sub_batch[0].keys() if k not in ['coords', 'feats']]
             for k in keys:
@@ -195,9 +195,9 @@ class SLat(SLatVisMixin, StandardDatasetBase):
                     pack[k] = sum([b[k] for b in sub_batch], [])
                 else:
                     pack[k] = [b[k] for b in sub_batch]
-                    
+
             packs.append(pack)
-          
+
         if split_size is None:
             return packs[0]
         return packs

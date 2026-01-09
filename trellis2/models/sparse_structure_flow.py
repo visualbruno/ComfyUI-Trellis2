@@ -111,12 +111,12 @@ class SparseStructureFlowModel(nn.Module):
             coords = torch.stack(coords, dim=-1).reshape(-1, 3)
             rope_phases = pos_embedder(coords)
             self.register_buffer("rope_phases", rope_phases)
-            
+
         if pe_mode != "rope":
             self.rope_phases = None
 
         self.input_layer = nn.Linear(in_channels, model_channels)
-            
+
         self.blocks = nn.ModuleList([
             ModulatedTransformerCrossBlock(
                 model_channels,
@@ -179,7 +179,7 @@ class SparseStructureFlowModel(nn.Module):
             # Zero-out output layers:
             nn.init.constant_(self.out_layer.weight, 0)
             nn.init.constant_(self.out_layer.bias, 0)
-            
+
         elif self.initialization == 'scaled':
             # Initialize transformer layers:
             def _basic_init(module):
@@ -188,7 +188,7 @@ class SparseStructureFlowModel(nn.Module):
                     if module.bias is not None:
                         nn.init.constant_(module.bias, 0)
             self.apply(_basic_init)
-            
+
             # Scaled init for to_out and ffn2
             def _scaled_init(module):
                 if isinstance(module, nn.Linear):
@@ -199,15 +199,15 @@ class SparseStructureFlowModel(nn.Module):
                 block.self_attn.to_out.apply(_scaled_init)
                 block.cross_attn.to_out.apply(_scaled_init)
                 block.mlp.mlp[2].apply(_scaled_init)
-            
+
             # Initialize input layer to make the initial representation have variance 1
             nn.init.normal_(self.input_layer.weight, std=1.0 / np.sqrt(self.in_channels))
             nn.init.zeros_(self.input_layer.bias)
-            
+
             # Initialize timestep embedding MLP:
             nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
             nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
-            
+
             # Zero-out adaLN modulation layers in DiT blocks:
             if self.share_mod:
                 nn.init.constant_(self.adaLN_modulation[-1].weight, 0)

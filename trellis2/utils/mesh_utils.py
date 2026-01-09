@@ -9,10 +9,10 @@ from plyfile import PlyData, PlyElement
 def read_ply(filename):
     """
     Read a PLY file and return vertices, triangle faces, and quad faces.
-    
+
     Args:
         filename (str): The file path to read from.
-        
+
     Returns:
         vertices (np.ndarray): Array of shape [N, 3] containing vertex positions.
         tris (np.ndarray): Array of shape [M, 3] containing triangle face indices (empty if none).
@@ -29,40 +29,40 @@ def read_ply(filename):
             if b"end_header" in line:
                 break
         header = header_bytes.decode('utf-8')
-        
+
         # Determine if the file is in ASCII or binary format
         is_ascii = "ascii" in header
-        
+
         # Extract the number of vertices and faces from the header using regex
         vertex_match = re.search(r'element vertex (\d+)', header)
         if vertex_match:
             num_vertices = int(vertex_match.group(1))
         else:
             raise ValueError("Vertex count not found in header")
-            
+
         face_match = re.search(r'element face (\d+)', header)
         if face_match:
             num_faces = int(face_match.group(1))
         else:
             raise ValueError("Face count not found in header")
-        
+
         vertices = []
         tris = []
         quads = []
-        
+
         if is_ascii:
             # For ASCII format, read each line of vertex data (each line contains 3 floats)
             for _ in range(num_vertices):
                 line = f.readline().decode('utf-8').strip()
-                if not line: 
+                if not line:
                     continue
                 parts = line.split()
                 vertices.append([float(parts[0]), float(parts[1]), float(parts[2])])
-            
+
             # Read face data, where the first number indicates the number of vertices for the face
             for _ in range(num_faces):
                 line = f.readline().decode('utf-8').strip()
-                if not line: 
+                if not line:
                     continue
                 parts = line.split()
                 count = int(parts[0])
@@ -83,7 +83,7 @@ def read_ply(filename):
                     raise ValueError("Insufficient vertex data")
                 v = struct.unpack('<fff', data)
                 vertices.append(v)
-            
+
             # Read face data from the binary stream
             for _ in range(num_faces):
                 # First, read 1 byte indicating the number of vertices in the face
@@ -108,12 +108,12 @@ def read_ply(filename):
                     data = f.read(count * 4)
                     # Skip or extend processing as needed
                     raise ValueError(f"Unsupported face with {count} vertices")
-        
+
         # Convert lists to torch.Tensor
         vertices = np.array(vertices, dtype=np.float32)
         tris = np.array(tris, dtype=np.int32) if len(tris) > 0 else np.empty((0, 3), dtype=np.int32)
         quads = np.array(quads, dtype=np.int32) if len(quads) > 0 else np.empty((0, 4), dtype=np.int32)
-        
+
         return vertices, tris, quads
 
 
@@ -128,7 +128,7 @@ def write_ply(
     """
     Write a mesh to a PLY file, with the option to save in ASCII or binary format,
     and optional per-vertex colors.
-    
+
     Args:
         filename (str): The filename to write to.
         vertices (np.ndarray): [N, 3] The vertex positions.
@@ -211,7 +211,7 @@ def write_ply(
                 f.write(struct.pack('<B3i', 3, *tri))
             for quad in quads:
                 f.write(struct.pack('<B4i', 4, *quad))
-                
+
 
 def write_pbr_ply(
     filename: str,
@@ -226,7 +226,7 @@ def write_pbr_ply(
     """
     Write a mesh to a PLY file, with the option to save in ASCII or binary format,
     and optional per-vertex colors.
-    
+
     Args:
         filename (str): The filename to write to.
         vertices (np.ndarray): [N, 3] The vertex positions.
@@ -242,7 +242,7 @@ def write_pbr_ply(
         ('red', 'u1'), ('green', 'u1'), ('blue', 'u1'),
         ('metallic', 'u1'), ('roughness', 'u1'), ('alpha', 'u1')
     ]
-    
+
     vertex_data = np.empty(len(vertices), dtype=vertex_dtype)
     vertex_data['x'] = vertices[:, 0]
     vertex_data['y'] = vertices[:, 1]
@@ -253,14 +253,14 @@ def write_pbr_ply(
     vertex_data['metallic'] = metallic
     vertex_data['roughness'] = roughness
     vertex_data['alpha'] = alpha
-    
+
     face_dtype = [
         ('vertex_indices', 'i4', (3,))
     ]
-    
+
     face_data = np.empty(len(faces), dtype=face_dtype)
     face_data['vertex_indices'] = faces
-    
+
     ply_data = PlyData([
         PlyElement.describe(vertex_data,'vertex'),
         PlyElement.describe(face_data, 'face'),

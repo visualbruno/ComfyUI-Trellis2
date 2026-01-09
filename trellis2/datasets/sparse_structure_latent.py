@@ -24,7 +24,7 @@ class SparseStructureLatentVisMixin:
         self.pretrained_ss_dec = pretrained_ss_dec
         self.ss_dec_path = ss_dec_path
         self.ss_dec_ckpt = ss_dec_ckpt
-        
+
     def _loading_ss_dec(self):
         if self.ss_dec is not None:
             return
@@ -57,11 +57,11 @@ class SparseStructureLatentVisMixin:
     def visualize_sample(self, x_0: Union[torch.Tensor, dict]):
         x_0 = x_0 if isinstance(x_0, torch.Tensor) else x_0['x_0']
         x_0 = self.decode_latent(x_0.cuda())
-        
+
         renderer = VoxelRenderer()
         renderer.rendering_options.resolution = 512
         renderer.rendering_options.ssaa = 4
-        
+
         # build camera
         yaw = [0, np.pi/2, np.pi, 3*np.pi/2]
         yaw_offset = -16 / 180 * np.pi
@@ -70,7 +70,7 @@ class SparseStructureLatentVisMixin:
         exts, ints = yaw_pitch_r_fov_to_extrinsics_intrinsics(yaw, pitch, 2, 30)
 
         images = []
-        
+
         # Build each representation
         x_0 = x_0.cuda()
         for i in range(x_0.shape[0]):
@@ -92,14 +92,14 @@ class SparseStructureLatentVisMixin:
                 res = renderer.render(rep, ext, intr, colors_overwrite=color)
                 image[:, 512 * (j // tile[1]):512 * (j // tile[1] + 1), 512 * (j % tile[1]):512 * (j % tile[1] + 1)] = res['color']
             images.append(image)
-            
+
         return torch.stack(images)
 
 
 class SparseStructureLatent(SparseStructureLatentVisMixin, StandardDatasetBase):
     """
     Sparse structure latent dataset
-    
+
     Args:
         roots (str): path to the dataset
         min_aesthetic_score (float): minimum aesthetic score
@@ -120,18 +120,18 @@ class SparseStructureLatent(SparseStructureLatentVisMixin, StandardDatasetBase):
         self.min_aesthetic_score = min_aesthetic_score
         self.normalization = normalization
         self.value_range = (0, 1)
-        
+
         super().__init__(
             roots,
             pretrained_ss_dec=pretrained_ss_dec,
             ss_dec_path=ss_dec_path,
             ss_dec_ckpt=ss_dec_ckpt,
         )
-        
+
         if self.normalization is not None:
             self.mean = torch.tensor(self.normalization['mean']).reshape(-1, 1, 1, 1)
             self.std = torch.tensor(self.normalization['std']).reshape(-1, 1, 1, 1)
-  
+
     def filter_metadata(self, metadata):
         stats = {}
         metadata = metadata[metadata['ss_latent_encoded'] == True]
@@ -139,7 +139,7 @@ class SparseStructureLatent(SparseStructureLatentVisMixin, StandardDatasetBase):
         metadata = metadata[metadata['aesthetic_score'] >= self.min_aesthetic_score]
         stats[f'Aesthetic score >= {self.min_aesthetic_score}'] = len(metadata)
         return metadata, stats
-                
+
     def get_instance(self, root, instance):
         latent = np.load(os.path.join(root['ss_latent'], f'{instance}.npz'))
         z = torch.tensor(latent['z']).float()
@@ -157,4 +157,3 @@ class ImageConditionedSparseStructureLatent(ImageConditionedMixin, SparseStructu
     Image-conditioned sparse structure dataset
     """
     pass
-    

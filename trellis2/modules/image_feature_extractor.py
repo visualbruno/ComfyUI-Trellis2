@@ -27,15 +27,15 @@ class DinoV2FeatureExtractor:
 
     def cpu(self):
         self.model.cpu()
-    
+
     @torch.no_grad()
     def __call__(self, image: Union[torch.Tensor, List[Image.Image]]) -> torch.Tensor:
         """
         Extract features from the image.
-        
+
         Args:
             image: A batch of images as a tensor of shape (B, C, H, W) or a list of PIL images.
-        
+
         Returns:
             A tensor of shape (B, N, D) where N is the number of patches and D is the feature dimension.
         """
@@ -49,12 +49,12 @@ class DinoV2FeatureExtractor:
             image = torch.stack(image).cuda()
         else:
             raise ValueError(f"Unsupported type of image: {type(image)}")
-        
+
         image = self.transform(image).cuda()
         features = self.model(image, is_training=True)['x_prenorm']
         patchtokens = F.layer_norm(features, features.shape[-1:])
         return patchtokens
-    
+
 
 class DinoV3FeatureExtractor:
     """
@@ -90,15 +90,15 @@ class DinoV3FeatureExtractor:
             )
 
         return F.layer_norm(hidden_states, hidden_states.shape[-1:])
-        
+
     @torch.no_grad()
     def __call__(self, image: Union[torch.Tensor, List[Image.Image]]) -> torch.Tensor:
         """
         Extract features from the image.
-        
+
         Args:
             image: A batch of images as a tensor of shape (B, C, H, W) or a list of PIL images.
-        
+
         Returns:
             A tensor of shape (B, N, D) where N is the number of patches and D is the feature dimension.
         """
@@ -112,7 +112,7 @@ class DinoV3FeatureExtractor:
             image = torch.stack(image).cuda()
         else:
             raise ValueError(f"Unsupported type of image: {type(image)}")
-        
+
         image = self.transform(image).cuda()
         features = self.extract_features(image)
         return features

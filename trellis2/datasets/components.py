@@ -30,7 +30,7 @@ class StandardDatasetBase(Dataset):
             root_type = 'list'
         self.instances = []
         self.metadata = pd.DataFrame()
-        
+
         self._stats = {}
         if root_type == 'obj':
             for key, root in self.roots.items():
@@ -54,15 +54,15 @@ class StandardDatasetBase(Dataset):
                 self.instances.extend([(root, sha256) for sha256 in metadata['sha256'].values])
                 metadata.set_index('sha256', inplace=True)
                 self.metadata = pd.concat([self.metadata, metadata])
-            
+
     @abstractmethod
     def filter_metadata(self, metadata: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, int]]:
         pass
-    
+
     @abstractmethod
     def get_instance(self, root, instance: str) -> Dict[str, Any]:
         pass
-        
+
     def __len__(self):
         return len(self.instances)
 
@@ -73,7 +73,7 @@ class StandardDatasetBase(Dataset):
         except Exception as e:
             print(f'Error loading {instance}: {e}')
             return self.__getitem__(np.random.randint(0, len(self)))
-        
+
     def __str__(self):
         lines = []
         lines.append(self.__class__.__name__)
@@ -90,16 +90,16 @@ class ImageConditionedMixin:
     def __init__(self, roots, *, image_size=518, **kwargs):
         self.image_size = image_size
         super().__init__(roots, **kwargs)
-    
+
     def filter_metadata(self, metadata):
         metadata, stats = super().filter_metadata(metadata)
         metadata = metadata[metadata['cond_rendered'].notna()]
         stats['Cond rendered'] = len(metadata)
         return metadata, stats
-    
+
     def get_instance(self, root, instance):
         pack = super().get_instance(root, instance)
-       
+
         image_root = os.path.join(root['render_cond'], instance)
         with open(os.path.join(image_root, 'transforms.json')) as f:
             metadata = json.load(f)
@@ -128,7 +128,7 @@ class ImageConditionedMixin:
         alpha = torch.tensor(np.array(alpha)).float() / 255.0
         image = image * alpha.unsqueeze(0)
         pack['cond'] = image
-       
+
         return pack
 
 
@@ -143,10 +143,10 @@ class MultiImageConditionedMixin:
         metadata = metadata[metadata['cond_rendered'].notna()]
         stats['Cond rendered'] = len(metadata)
         return metadata, stats
-    
+
     def get_instance(self, root, instance):
         pack = super().get_instance(root, instance)
-       
+
         image_root = os.path.join(root['render_cond'], instance)
         with open(os.path.join(image_root, 'transforms.json')) as f:
             metadata = json.load(f)

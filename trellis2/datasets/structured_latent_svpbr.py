@@ -32,7 +32,7 @@ class SLatPbrVisMixin:
         self.pretrained_shape_slat_dec = pretrained_shape_slat_dec
         self.shape_slat_dec_path = shape_slat_dec_path
         self.shape_slat_dec_ckpt = shape_slat_dec_ckpt
-        
+
     def _loading_slat_dec(self):
         if self.pbr_slat_dec is not None and self.shape_slat_dec is not None:
             return
@@ -60,7 +60,7 @@ class SLatPbrVisMixin:
         self.pbr_slat_dec = None
         del self.shape_slat_dec
         self.shape_slat_dec = None
-        
+
     @torch.no_grad()
     def decode_latent(self, z, shape_z, batch_size=4):
         self._loading_slat_dec()
@@ -86,20 +86,20 @@ class SLatPbrVisMixin:
             ])
         self._delete_slat_dec()
         return reps
-    
+
     @torch.no_grad()
     def visualize_sample(self, sample: dict):
         shape_z = sample['concat_cond'].cuda()
         z = sample['x_0'].cuda()
         reps = self.decode_latent(z, shape_z)
-        
+
         # build camera
         yaw = [0, np.pi/2, np.pi, 3*np.pi/2]
         yaw_offset = -16 / 180 * np.pi
         yaw = [y + yaw_offset for y in yaw]
         pitch = [20 / 180 * np.pi for _ in range(4)]
         exts, ints = yaw_pitch_r_fov_to_extrinsics_intrinsics(yaw, pitch, 2, 30)
-        
+
         # render
         renderer = get_renderer(reps[0])
         images = {k: [] for k in self.layout}
@@ -115,12 +115,12 @@ class SLatPbrVisMixin:
         for k in self.layout:
             images[k] = torch.stack(images[k], dim=0)
         return images
-    
-    
+
+
 class SLatPbr(SLatPbrVisMixin, StandardDatasetBase):
     """
     structured latent for sparse voxel pbr dataset
-    
+
     Args:
         roots (str): path to the dataset
         latent_key (str): key of the latent to be used
@@ -149,7 +149,7 @@ class SLatPbr(SLatPbrVisMixin, StandardDatasetBase):
         shape_slat_dec_path: Optional[str] = None,
         shape_slat_dec_ckpt: Optional[str] = None,
         **kwargs
-    ):  
+    ):
         self.resolution = resolution
         self.pbr_slat_normalization = pbr_slat_normalization
         self.shape_slat_normalization = shape_slat_normalization
@@ -157,7 +157,7 @@ class SLatPbr(SLatPbrVisMixin, StandardDatasetBase):
         self.max_tokens = max_tokens
         self.full_pbr = full_pbr
         self.value_range = (-1, 1)
-        
+
         super().__init__(
             roots,
             pretrained_pbr_slat_dec=pretrained_pbr_slat_dec,
@@ -168,17 +168,17 @@ class SLatPbr(SLatPbrVisMixin, StandardDatasetBase):
             shape_slat_dec_ckpt=shape_slat_dec_ckpt,
             **kwargs
         )
-        
+
         self.loads = [self.metadata.loc[sha256, 'pbr_latent_tokens'] for _, sha256 in self.instances]
-        
+
         if self.pbr_slat_normalization is not None:
             self.pbr_slat_mean = torch.tensor(self.pbr_slat_normalization['mean']).reshape(1, -1)
             self.pbr_slat_std = torch.tensor(self.pbr_slat_normalization['std']).reshape(1, -1)
-        
+
         if self.shape_slat_normalization is not None:
             self.shape_slat_mean = torch.tensor(self.shape_slat_normalization['mean']).reshape(1, -1)
             self.shape_slat_std = torch.tensor(self.shape_slat_normalization['std']).reshape(1, -1)
-        
+
         self.attrs = attrs
         self.channels = {
             'base_color': 3,
@@ -192,7 +192,7 @@ class SLatPbr(SLatPbrVisMixin, StandardDatasetBase):
         for attr in attrs:
             self.layout[attr] = slice(start, start + self.channels[attr])
             start += self.channels[attr]
-            
+
     def filter_metadata(self, metadata):
         stats = {}
         metadata = metadata[metadata['pbr_latent_encoded'] == True]
@@ -209,7 +209,7 @@ class SLatPbr(SLatPbrVisMixin, StandardDatasetBase):
             metadata = metadata[metadata['num_roughness_tex'] > 0]
             stats['Full PBR'] = len(metadata)
         return metadata, stats
-    
+
     def get_instance(self, root, instance):
         # PBR latent
         data = np.load(os.path.join(root['pbr_latent'], f'{instance}.npz'))
@@ -219,7 +219,7 @@ class SLatPbr(SLatPbrVisMixin, StandardDatasetBase):
         if self.pbr_slat_normalization is not None:
             feats = (feats - self.pbr_slat_mean) / self.pbr_slat_std
         pbr_z = SparseTensor(feats, coords)
-        
+
         # Shape latent
         data = np.load(os.path.join(root['shape_latent'], f'{instance}.npz'))
         coords = torch.tensor(data['coords']).int()
@@ -228,15 +228,15 @@ class SLatPbr(SLatPbrVisMixin, StandardDatasetBase):
         if self.shape_slat_normalization is not None:
             feats = (feats - self.shape_slat_mean) / self.shape_slat_std
         shape_z = SparseTensor(feats, coords)
-        
+
         assert torch.equal(shape_z.coords, pbr_z.coords), \
             f"Shape latent and PBR latent have different coordinates: {shape_z.coords.shape} vs {pbr_z.coords.shape}"
-            
+
         return {
             'x_0': pbr_z,
             'concat_cond': shape_z,
         }
-        
+
     @staticmethod
     def collate_fn(batch, split_size=None):
         if split_size is None:
@@ -258,9 +258,9 @@ class SLatPbr(SLatPbrVisMixin, StandardDatasetBase):
                     pack[k] = sum([b[k] for b in sub_batch], [])
                 else:
                     pack[k] = [b[k] for b in sub_batch]
-            
+
             packs.append(pack)
-        
+
         if split_size is None:
             return packs[0]
         return packs
