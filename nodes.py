@@ -40,7 +40,7 @@ to_pil = transforms.ToPILImage()
 
 def pil2tensor(image):
     return torch.from_numpy(np.array(image).astype(np.float32) / 255.0)[None,]
-    
+
 def tensor2pil(image: torch.Tensor) -> Image.Image:
     """
     Accepts either:
@@ -61,8 +61,8 @@ def tensor2pil(image: torch.Tensor) -> Image.Image:
         arr = (t.numpy() * 255.0).clip(0, 255).astype(np.uint8)
         return Image.fromarray(arr)
 
-    raise TypeError(f"tensor2pil expected torch.Tensor, got {type(image)}")    
-    
+    raise TypeError(f"tensor2pil expected torch.Tensor, got {type(image)}")
+
 def tensor_batch_to_pil_list(images: torch.Tensor, max_views: int = 4) -> list[Image.Image]:
     """
     Converts a ComfyUI IMAGE tensor (B,H,W,C) into a list of PIL images.
@@ -79,40 +79,40 @@ def tensor_batch_to_pil_list(images: torch.Tensor, max_views: int = 4) -> list[I
     if images.ndim == 3:
         return [tensor2pil(images)]
 
-    raise ValueError(f"Unsupported IMAGE tensor shape: {tuple(images.shape)}")    
-    
+    raise ValueError(f"Unsupported IMAGE tensor shape: {tuple(images.shape)}")
+
 def convert_tensor_images_to_pil(images):
     pil_array = []
-    
+
     for image in images:
         pil_array.append(tensor2pil(image))
-        
+
     return pil_array
-    
+
 def simplify_with_meshlib(vertices, faces, target=1000000):
     current_faces_num = len(faces)
     print(f'Current Faces Number: {current_faces_num}')
-    
+
     if current_faces_num<target:
         return
 
     settings = mrmeshpy.DecimateSettings()
     faces_to_delete = current_faces_num - target
-    settings.maxDeletedFaces = faces_to_delete                        
+    settings.maxDeletedFaces = faces_to_delete
     settings.packMesh = True
-    
+
     print('Generating Meshlib Mesh ...')
     mesh = mrmeshnumpy.meshFromFacesVerts(faces, vertices)
     print('Packing Optimally ...')
     mesh.packOptimally()
     print('Decimating ...')
     mrmeshpy.decimateMesh(mesh, settings)
-    
+
     new_vertices = mrmeshnumpy.getNumpyVerts(mesh)
-    new_faces = mrmeshnumpy.getNumpyFaces(mesh.topology)               
-    
+    new_faces = mrmeshnumpy.getNumpyFaces(mesh.topology)
+
     print(f"Reduced faces, resulting in {len(new_vertices)} vertices and {len(new_faces)} faces")
-        
+
     return new_vertices, new_faces
 
 def remove_floater(mesh):
@@ -123,27 +123,27 @@ def remove_floater(mesh):
     mesh_pymeshlab = pymeshlab.Mesh(vertex_matrix=mesh.vertices.cpu().numpy(), face_matrix=faces)
     mesh_set.add_mesh(mesh_pymeshlab, "converted_mesh")
     mesh_set = pymeshlab_remove_floater(mesh_set)
-    
-    mesh_pymeshlab = mesh_set.current_mesh()    
-    
+
+    mesh_pymeshlab = mesh_set.current_mesh()
+
     new_faces = mesh_pymeshlab.face_matrix()
     print(f"After removing floater: {len(new_faces)}")
-    
+
     new_vertices = torch.from_numpy(mesh_pymeshlab.vertex_matrix()).contiguous().float()
-    new_faces = torch.from_numpy(new_faces).contiguous().int()   
-    
+    new_faces = torch.from_numpy(new_faces).contiguous().int()
+
     mesh.vertices = new_vertices
     mesh.faces = new_faces
-    
+
     return mesh
-    
+
 def pymeshlab_remove_floater(mesh: pymeshlab.MeshSet):
     mesh.apply_filter("compute_selection_by_small_disconnected_components_per_face",
                       nbfaceratio=0.005)
     mesh.apply_filter("compute_selection_transfer_face_to_vertex", inclusive=False)
     mesh.apply_filter("meshing_remove_selected_vertices_and_faces")
-    return mesh 
-    
+    return mesh
+
 def _batched_unsigned_distance(bvh, positions, batch_size=100000, return_uvw=False):
     """
     Batch unsigned_distance queries to avoid GPU kernel timeout on large meshes.
@@ -180,7 +180,7 @@ def _batched_unsigned_distance(bvh, positions, batch_size=100000, return_uvw=Fal
         torch.cat(distances_list),
         torch.cat(face_id_list),
         torch.cat(uvw_list) if return_uvw else None
-    )    
+    )
 
 class Trellis2LoadModel:
     @classmethod
@@ -205,38 +205,71 @@ class Trellis2LoadModel:
         os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
         os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"  # Can save GPU memory
         #os.environ["FLEX_GEMM_AUTOTUNE_CACHE_PATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'autotune_cache.json')
-        #os.environ["FLEX_GEMM_AUTOTUNER_VERBOSE"] = '1'        
+        #os.environ["FLEX_GEMM_AUTOTUNER_VERBOSE"] = '1'
         os.environ['ATTN_BACKEND'] = backend
-        
+
         torch.backends.cudnn.benchmark = False
-        
-        download_path = os.path.join(folder_paths.models_dir,"microsoft")
-        model_path = os.path.join(download_path, modelname)
-        
-        hf_model_name = f"microsoft/{modelname}"
-        
-        if not os.path.exists(model_path):
+
+        # Register model folders if not already registered
+        if "microsoft" not in folder_paths.folder_names_and_paths:
+            folder_paths.add_model_folder_path(
+                "microsoft",
+                os.path.join(folder_paths.models_dir, "microsoft")
+            )
+        if "facebook" not in folder_paths.folder_names_and_paths:
+            folder_paths.add_model_folder_path(
+                "facebook",
+                os.path.join(folder_paths.models_dir, "facebook")
+            )
+
+        # Check all registered paths for main model
+        model_paths = folder_paths.get_folder_paths("microsoft")
+        model_path = None
+        for base in model_paths:
+            candidate = os.path.join(base, modelname)
+            if os.path.exists(candidate):
+                model_path = candidate
+                break
+
+        # Download if not found
+        if model_path is None:
+            model_path = os.path.join(folder_paths.models_dir, "microsoft", modelname)
             print(f"Downloading model to: {model_path}")
             from huggingface_hub import snapshot_download
             snapshot_download(
-                repo_id=hf_model_name,
+                repo_id=f"microsoft/{modelname}",
                 local_dir=model_path,
                 local_dir_use_symlinks=False,
             )
-            
-        dinov3_model_path = os.path.join(folder_paths.models_dir,"facebook","dinov3-vitl16-pretrain-lvd1689m","model.safetensors")
-        if not os.path.exists(dinov3_model_path):
+
+        # Check for dinov3 in registered paths
+        dinov3_model_path = None
+        facebook_paths = folder_paths.get_folder_paths("facebook")
+        for base in facebook_paths:
+            candidate = os.path.join(base, "dinov3-vitl16-pretrain-lvd1689m", "model.safetensors")
+            if os.path.exists(candidate):
+                dinov3_model_path = candidate
+                break
+
+        if dinov3_model_path is None:
             raise Exception("Facebook Dinov3 model not found in models/facebook/dinov3-vitl16-pretrain-lvd1689m folder")
-        
-        trellis_image_large_path = os.path.join(folder_paths.models_dir,"microsoft","TRELLIS-image-large","ckpts","ss_dec_conv3d_16l8_fp16.safetensors")
-        if not os.path.exists(trellis_image_large_path):
+
+        # Check for trellis-image-large in registered paths
+        trellis_image_large_path = None
+        for base in model_paths:
+            candidate = os.path.join(base, "TRELLIS-image-large", "ckpts", "ss_dec_conv3d_16l8_fp16.safetensors")
+            if os.path.exists(candidate):
+                trellis_image_large_path = candidate
+                break
+
+        if trellis_image_large_path is None:
             print('Trellis-Image-Large ss_dec_conv3d_16l8_fp16 files not found. Trying to download the files from huggingface ...')
             import requests
             url = "https://huggingface.co/microsoft/TRELLIS-image-large/resolve/main/ckpts/ss_dec_conv3d_16l8_fp16.json?download=true"
             filename = os.path.join(folder_paths.models_dir,"microsoft","TRELLIS-image-large","ckpts","ss_dec_conv3d_16l8_fp16.json")
             path = Path(filename)
             path.parent.mkdir(parents=True, exist_ok=True)
-            
+
             response = requests.get(url)
             if response.status_code == 200:
                 with open(filename, "wb") as f:
@@ -244,7 +277,7 @@ class Trellis2LoadModel:
                 print("Download ss_dec_conv3d_16l8_fp16.json complete!")
             else:
                 raise Exception("Cannot download Trellis-Image-Large file ss_dec_conv3d_16l8_fp16.json")
-            
+
             url = "https://huggingface.co/microsoft/TRELLIS-image-large/resolve/main/ckpts/ss_dec_conv3d_16l8_fp16.safetensors?download=true"
             filename = os.path.join(folder_paths.models_dir,"microsoft","TRELLIS-image-large","ckpts","ss_dec_conv3d_16l8_fp16.safetensors")
 
@@ -255,10 +288,10 @@ class Trellis2LoadModel:
                 print("Download ss_dec_conv3d_16l8_fp16.safetensors complete!")
             else:
                 raise Exception("Cannot download Trellis-Image-Large file ss_dec_conv3d_16l8_fp16.safetensors")
-        
+
         pipeline = Trellis2ImageTo3DPipeline.from_pretrained(model_path, keep_models_loaded = keep_models_loaded)
         pipeline.low_vram = low_vram
-        
+
         if device=="cuda":
             if low_vram:
                 pipeline.cuda()
@@ -266,16 +299,16 @@ class Trellis2LoadModel:
                 pipeline.to(device)
         else:
             pipeline.to(device)
-        
+
         return (pipeline,)
-        
+
 class Trellis2MeshWithVoxelGenerator:
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
                 "pipeline": ("TRELLIS2PIPELINE",),
-                "image": ("IMAGE",),                
+                "image": ("IMAGE",),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0x7fffffff}),
                 "pipeline_type": (["512","1024","1024_cascade","1536_cascade"],{"default":"1024_cascade"}),
                 "sparse_structure_steps": ("INT",{"default":12, "min":1, "max":100},),
@@ -298,21 +331,21 @@ class Trellis2MeshWithVoxelGenerator:
     def process(self, pipeline, image, seed, pipeline_type, sparse_structure_steps, shape_steps, texture_steps, max_num_tokens, max_views, sparse_structure_resolution, generate_texture_slat, use_tiled_decoder):
         images = tensor_batch_to_pil_list(image, max_views=max_views)
         image_in = images[0] if len(images) == 1 else images
-        
+
         sparse_structure_sampler_params = {"steps":sparse_structure_steps}
         shape_slat_sampler_params = {"steps":shape_steps}
         tex_slat_sampler_params = {"steps":texture_steps}
-        
+
         if generate_texture_slat:
             num_steps = 5
         else:
             num_steps = 4
 
-        pbar = ProgressBar(num_steps)        
-        
+        pbar = ProgressBar(num_steps)
+
         mesh = pipeline.run(image=image_in, seed=seed, pipeline_type=pipeline_type, sparse_structure_sampler_params = sparse_structure_sampler_params, shape_slat_sampler_params = shape_slat_sampler_params, tex_slat_sampler_params = tex_slat_sampler_params, max_num_tokens = max_num_tokens, sparse_structure_resolution = sparse_structure_resolution, max_views = max_views, generate_texture_slat = generate_texture_slat, use_tiled=use_tiled_decoder, pbar=pbar)[0]
-        
-        return (mesh,)    
+
+        return (mesh,)
 
 class Trellis2LoadImageWithTransparency:
     @classmethod
@@ -343,7 +376,7 @@ class Trellis2LoadImageWithTransparency:
 
         for i in ImageSequence.Iterator(img):
             i = node_helpers.pillow(ImageOps.exif_transpose, i)
-            
+
             output_images_ori.append(pil2tensor(i))
 
             if i.mode == 'I':
@@ -394,7 +427,7 @@ class Trellis2LoadImageWithTransparency:
         if not folder_paths.exists_annotated_filepath(image):
             return "Invalid image file: {}".format(image)
 
-        return True  
+        return True
 
 class Trellis2SimplifyMesh:
     @classmethod
@@ -413,17 +446,17 @@ class Trellis2SimplifyMesh:
     CATEGORY = "Trellis2Wrapper"
     OUTPUT_NODE = True
 
-    def process(self, mesh, target_face_num, method):        
+    def process(self, mesh, target_face_num, method):
         mesh_copy = copy.deepcopy(mesh)
         if method=="Cumesh":
             mesh_copy.simplify_with_cumesh(target = target_face_num)
         elif method=="Meshlib":
             mesh_copy.simplify_with_meshlib(target = target_face_num)
         else:
-            raise Exception("Unknown simplification method")             
-        
-        return (mesh_copy,)          
-        
+            raise Exception("Unknown simplification method")
+
+        return (mesh_copy,)
+
 class Trellis2MeshWithVoxelToTrimesh:
     @classmethod
     def INPUT_TYPES(s):
@@ -439,18 +472,18 @@ class Trellis2MeshWithVoxelToTrimesh:
     CATEGORY = "Trellis2Wrapper"
     OUTPUT_NODE = True
 
-    def process(self, mesh):       
+    def process(self, mesh):
         vertices_np = mesh.vertices.cpu().numpy()
-        vertices_np[:, 1], vertices_np[:, 2] = vertices_np[:, 2], -vertices_np[:, 1]        
-        
+        vertices_np[:, 1], vertices_np[:, 2] = vertices_np[:, 2], -vertices_np[:, 1]
+
         trimesh = Trimesh.Trimesh(
             vertices=vertices_np,
             faces=mesh.faces.cpu().numpy(),
             process=False
         )
-        
+
         return (trimesh,)
-        
+
 class Trellis2ExportMesh:
     @classmethod
     def INPUT_TYPES(s):
@@ -482,15 +515,15 @@ class Trellis2ExportMesh:
             temp_file = Path(full_output_folder, f'hy3dtemp_.{file_format}')
             trimesh.export(temp_file, file_type=file_format,include_normals=True)
             relative_path = Path(subfolder) / f'hy3dtemp_.{file_format}'
-        
-        return (str(relative_path), )        
-        
+
+        return (str(relative_path), )
+
 class Trellis2PostProcessMesh:
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
-                "mesh": ("MESHWITHVOXEL",),                
+                "mesh": ("MESHWITHVOXEL",),
                 "fill_holes": ("BOOLEAN", {"default":True}),
                 "fill_holes_max_perimeter": ("FLOAT",{"default":0.03,"min":0.001,"max":99.999,"step":0.001}),
                 "remove_duplicate_faces": ("BOOLEAN",{"default":True}),
@@ -521,49 +554,49 @@ class Trellis2PostProcessMesh:
         # Move data to GPU
         vertices = vertices.cuda()
         faces = faces.cuda()
-        
+
         # Initialize CUDA mesh handler
         cumesh = CuMesh.CuMesh()
         cumesh.init(vertices, faces)
         print(f"Current vertices: {cumesh.num_vertices}, faces: {cumesh.num_faces}")
-        
+
         if fill_holes:
             cumesh.fill_holes(max_hole_perimeter=fill_holes_max_perimeter)
             print(f"After filling holes: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")
-            
+
         if remove_duplicate_faces:
             print('Removing duplicate faces ...')
             cumesh.remove_duplicate_faces()
-            
+
         if repair_non_manifold_edges:
             print('Repairing non manifold edges ...')
             cumesh.repair_non_manifold_edges()
-            
+
         if remove_non_manifold_faces:
             print('Removing non manifold faces ...')
             cumesh.remove_non_manifold_faces()
-            
+
         if remove_small_connected_components:
             print('Removing small connected components ...')
-            cumesh.remove_small_connected_components(remove_small_connected_components_size)        
-        
+            cumesh.remove_small_connected_components(remove_small_connected_components_size)
+
         if unify_faces_orientation:
             print('Unifying faces orientation ...')
             cumesh.unify_face_orientations()
-        
-        print(f"After initial cleanup: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")                                   
-                
-        
+
+        print(f"After initial cleanup: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")
+
+
         new_vertices, new_faces = cumesh.read()
-        
+
         mesh_copy.vertices = new_vertices.to(mesh_copy.device)
-        mesh_copy.faces = new_faces.to(mesh_copy.device) 
-        
+        mesh_copy.faces = new_faces.to(mesh_copy.device)
+
         del cumesh
-        gc.collect()     
-                
+        gc.collect()
+
         return (mesh_copy,)
-       
+
 class Trellis2UnWrapAndRasterizer:
     @classmethod
     def INPUT_TYPES(s):
@@ -573,7 +606,7 @@ class Trellis2UnWrapAndRasterizer:
                 "mesh_cluster_threshold_cone_half_angle_rad": ("FLOAT",{"default":90.0,"min":0.0,"max":359.9}),
                 "mesh_cluster_refine_iterations": ("INT",{"default":0}),
                 "mesh_cluster_global_iterations": ("INT",{"default":1}),
-                "mesh_cluster_smooth_strength": ("INT",{"default":1}),                
+                "mesh_cluster_smooth_strength": ("INT",{"default":1}),
                 "texture_size": ("INT",{"default":1024, "min":512, "max":16384}),
                 "texture_alpha_mode": (["OPAQUE","MASK","BLEND"],{"default":"OPAQUE"}),
                 "double_side_material": ("BOOLEAN",{"default":True}),
@@ -588,16 +621,16 @@ class Trellis2UnWrapAndRasterizer:
 
     def process(self, mesh, mesh_cluster_threshold_cone_half_angle_rad, mesh_cluster_refine_iterations, mesh_cluster_global_iterations, mesh_cluster_smooth_strength, texture_size, texture_alpha_mode, double_side_material):
         mesh_copy = copy.deepcopy(mesh)
-        
+
         aabb = [[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]]
-        
+
         vertices = mesh_copy.vertices
         faces = mesh_copy.faces
         attr_volume = mesh_copy.attrs
         coords = mesh_copy.coords
         attr_layout = mesh_copy.layout
-        voxel_size = mesh_copy.voxel_size  
-        
+        voxel_size = mesh_copy.voxel_size
+
         mesh_cluster_threshold_cone_half_angle_rad = np.radians(mesh_cluster_threshold_cone_half_angle_rad)
 
         # --- Input Normalization (AABB, Voxel Size, Grid Size) ---
@@ -606,7 +639,7 @@ class Trellis2UnWrapAndRasterizer:
         if isinstance(aabb, np.ndarray):
             aabb = torch.tensor(aabb, dtype=torch.float32, device=coords.device)
 
-        # Calculate grid dimensions based on AABB and voxel size                
+        # Calculate grid dimensions based on AABB and voxel size
         if voxel_size is not None:
             if isinstance(voxel_size, float):
                 voxel_size = [voxel_size, voxel_size, voxel_size]
@@ -622,21 +655,21 @@ class Trellis2UnWrapAndRasterizer:
                 grid_size = np.array(grid_size)
             if isinstance(grid_size, np.ndarray):
                 grid_size = torch.tensor(grid_size, dtype=torch.int32, device=coords.device)
-            voxel_size = (aabb[1] - aabb[0]) / grid_size       
-        
-            print(f"Original mesh: {vertices.shape[0]} vertices, {faces.shape[0]} faces")        
-        
+            voxel_size = (aabb[1] - aabb[0]) / grid_size
+
+            print(f"Original mesh: {vertices.shape[0]} vertices, {faces.shape[0]} faces")
+
         vertices = vertices.cuda()
-        faces = faces.cuda()        
-        
+        faces = faces.cuda()
+
         cumesh = CuMesh.CuMesh()
         cumesh.init(vertices, faces)
-        
+
         # Build BVH for the current mesh to guide remeshing
         print(f"Building BVH for current mesh...")
-        bvh = CuMesh.cuBVH(vertices, faces)        
-        
-        print('Unwrapping ...')        
+        bvh = CuMesh.cuBVH(vertices, faces)
+
+        print('Unwrapping ...')
         out_vertices, out_faces, out_uvs, out_vmaps = cumesh.uv_unwrap(
             compute_charts_kwargs={
                 "threshold_cone_half_angle_rad": mesh_cluster_threshold_cone_half_angle_rad,
@@ -647,13 +680,13 @@ class Trellis2UnWrapAndRasterizer:
             return_vmaps=True,
             verbose=True,
         )
-        
+
         out_vertices = out_vertices.cuda()
         out_faces = out_faces.cuda()
         out_uvs = out_uvs.cuda()
         out_vmaps = out_vmaps.cuda()
         cumesh.compute_vertex_normals()
-        out_normals = cumesh.read_vertex_normals()[out_vmaps]        
+        out_normals = cumesh.read_vertex_normals()[out_vmaps]
 
         print("Sampling attributes...")
         # Setup differentiable rasterizer context
@@ -661,7 +694,7 @@ class Trellis2UnWrapAndRasterizer:
         # Prepare UV coordinates for rasterization (rendering in UV space)
         uvs_rast = torch.cat([out_uvs * 2 - 1, torch.zeros_like(out_uvs[:, :1]), torch.ones_like(out_uvs[:, :1])], dim=-1).unsqueeze(0)
         rast = torch.zeros((1, texture_size, texture_size, 4), device='cuda', dtype=torch.float32)
-        
+
         # Rasterize in chunks to save memory
         for i in range(0, out_faces.shape[0], 100000):
             rast_chunk, _ = dr.rasterize(
@@ -671,20 +704,20 @@ class Trellis2UnWrapAndRasterizer:
             mask_chunk = rast_chunk[..., 3:4] > 0
             rast_chunk[..., 3:4] += i # Store face ID in alpha channel
             rast = torch.where(mask_chunk, rast_chunk, rast)
-        
+
         # Mask of valid pixels in texture
         mask = rast[0, ..., 3] > 0
-        
+
         # Interpolate 3D positions in UV space (finding 3D coord for every texel)
         pos = dr.interpolate(out_vertices.unsqueeze(0), rast, out_faces)[0][0]
         valid_pos = pos[mask]
-        
+
         # Map these positions back to the *original* high-res mesh to get accurate attributes
         # This corrects geometric errors introduced by simplification/remeshing
         _, face_id, uvw = bvh.unsigned_distance(valid_pos, return_uvw=True)
         orig_tri_verts = vertices[faces[face_id.long()]] # (N_new, 3, 3)
         valid_pos = (orig_tri_verts * uvw.unsqueeze(-1)).sum(dim=1)
-        
+
         # Trilinear sampling from the attribute volume (Color, Material props)
         attrs = torch.zeros(texture_size, texture_size, attr_volume.shape[1], device='cuda')
         attrs[mask] = grid_sample_3d(
@@ -694,31 +727,31 @@ class Trellis2UnWrapAndRasterizer:
             grid=((valid_pos - aabb[0]) / voxel_size).reshape(1, -1, 3),
             mode='trilinear',
         )
-        
+
         # --- Texture Post-Processing & Material Construction ---
         print("Finalizing mesh...")
-        
+
         mask = mask.cpu().numpy()
-        
+
         # Extract channels based on layout (BaseColor, Metallic, Roughness, Alpha)
         base_color = np.clip(attrs[..., attr_layout['base_color']].cpu().numpy() * 255, 0, 255).astype(np.uint8)
         metallic = np.clip(attrs[..., attr_layout['metallic']].cpu().numpy() * 255, 0, 255).astype(np.uint8)
         roughness = np.clip(attrs[..., attr_layout['roughness']].cpu().numpy() * 255, 0, 255).astype(np.uint8)
         alpha = np.clip(attrs[..., attr_layout['alpha']].cpu().numpy() * 255, 0, 255).astype(np.uint8)
         alpha_mode = texture_alpha_mode
-        
+
         # Inpainting: fill gaps (dilation) to prevent black seams at UV boundaries
         mask_inv = (~mask).astype(np.uint8)
         base_color = cv2.inpaint(base_color, mask_inv, 3, cv2.INPAINT_TELEA)
         metallic = cv2.inpaint(metallic, mask_inv, 1, cv2.INPAINT_TELEA)[..., None]
         roughness = cv2.inpaint(roughness, mask_inv, 1, cv2.INPAINT_TELEA)[..., None]
         alpha = cv2.inpaint(alpha, mask_inv, 1, cv2.INPAINT_TELEA)[..., None]
-        
+
         # Create PBR material
         # Standard PBR packs Metallic and Roughness into Blue and Green channels
         baseColorTexture_np = Image.fromarray(np.concatenate([base_color, alpha], axis=-1))
         metallicRoughnessTexture_np = Image.fromarray(np.concatenate([np.zeros_like(metallic), roughness, metallic], axis=-1))
-        
+
         material = Trimesh.visual.material.PBRMaterial(
             baseColorTexture=baseColorTexture_np,
             baseColorFactor=np.array([255, 255, 255, 255], dtype=np.uint8),
@@ -727,34 +760,34 @@ class Trellis2UnWrapAndRasterizer:
             roughnessFactor=1.0,
             alphaMode=alpha_mode,
             doubleSided=double_side_material,
-        )        
-        
+        )
+
         vertices_np = out_vertices.cpu().numpy()
         faces_np = out_faces.cpu().numpy()
         uvs_np = out_uvs.cpu().numpy()
         normals_np = out_normals.cpu().numpy()
-        
+
         # Swap Y and Z axes, invert Y (common conversion for GLB compatibility)
         vertices_np[:, 1], vertices_np[:, 2] = vertices_np[:, 2], -vertices_np[:, 1]
         normals_np[:, 1], normals_np[:, 2] = normals_np[:, 2], -normals_np[:, 1]
         uvs_np[:, 1] = 1 - uvs_np[:, 1] # Flip UV V-coordinate
-        
+
         textured_mesh = Trimesh.Trimesh(
             vertices=vertices_np,
             faces=faces_np,
             vertex_normals=normals_np,
             process=False,
             visual=Trimesh.visual.TextureVisuals(uv=uvs_np,material=material)
-        )   
+        )
 
         del cumesh
-        gc.collect()    
+        gc.collect()
 
         baseColorTexture = pil2tensor(baseColorTexture_np)
         metallicRoughnessTexture = pil2tensor(metallicRoughnessTexture_np)
-                
+
         return (textured_mesh, baseColorTexture, metallicRoughnessTexture, )
-        
+
 class Trellis2MeshWithVoxelAdvancedGenerator:
     @classmethod
     def INPUT_TYPES(s):
@@ -771,11 +804,11 @@ class Trellis2MeshWithVoxelAdvancedGenerator:
                 "shape_steps": ("INT",{"default":12, "min":1, "max":100},),
                 "shape_guidance_strength": ("FLOAT",{"default":7.50}),
                 "shape_guidance_rescale": ("FLOAT",{"default":0.50}),
-                "shape_rescale_t": ("FLOAT",{"default":3.00}),                
+                "shape_rescale_t": ("FLOAT",{"default":3.00}),
                 "texture_steps": ("INT",{"default":12, "min":1, "max":100},),
                 "texture_guidance_strength": ("FLOAT",{"default":1.00}),
                 "texture_guidance_rescale": ("FLOAT",{"default":0.00}),
-                "texture_rescale_t": ("FLOAT",{"default":3.00}),                
+                "texture_rescale_t": ("FLOAT",{"default":3.00}),
                 "max_num_tokens": ("INT",{"default":49152,"min":0,"max":999999}),
                 "max_views": ("INT", {"default": 4, "min": 1, "max": 16}),
                 "sparse_structure_resolution": ("INT", {"default":32,"min":8,"max":128,"step":8}),
@@ -796,18 +829,18 @@ class Trellis2MeshWithVoxelAdvancedGenerator:
     CATEGORY = "Trellis2Wrapper"
     OUTPUT_NODE = True
 
-    def process(self, pipeline, image, seed, pipeline_type, sparse_structure_steps, 
-        sparse_structure_guidance_strength, 
+    def process(self, pipeline, image, seed, pipeline_type, sparse_structure_steps,
+        sparse_structure_guidance_strength,
         sparse_structure_guidance_rescale,
         sparse_structure_rescale_t,
-        shape_steps, 
-        shape_guidance_strength, 
+        shape_steps,
+        shape_guidance_strength,
         shape_guidance_rescale,
-        shape_rescale_t,        
-        texture_steps, 
-        texture_guidance_strength, 
+        shape_rescale_t,
+        texture_steps,
+        texture_guidance_strength,
         texture_guidance_rescale,
-        texture_rescale_t,        
+        texture_rescale_t,
         max_num_tokens,
         max_views,
         sparse_structure_resolution,
@@ -822,25 +855,25 @@ class Trellis2MeshWithVoxelAdvancedGenerator:
 
         images = tensor_batch_to_pil_list(image, max_views=max_views)
         image_in = images[0] if len(images) == 1 else images
-        
+
         sparse_structure_guidance_interval = [sparse_structure_guidance_interval_start,sparse_structure_guidance_interval_end]
         shape_guidance_interval = [shape_guidance_interval_start,shape_guidance_interval_end]
         texture_guidance_interval = [texture_guidance_interval_start,texture_guidance_interval_end]
-        
-        sparse_structure_sampler_params = {"steps":sparse_structure_steps,"guidance_strength":sparse_structure_guidance_strength,"guidance_rescale":sparse_structure_guidance_rescale,"guidance_interval":sparse_structure_guidance_interval,"rescale_t":sparse_structure_rescale_t}        
-        shape_slat_sampler_params = {"steps":shape_steps,"guidance_strength":shape_guidance_strength,"guidance_rescale":shape_guidance_rescale,"guidance_interval":shape_guidance_interval,"rescale_t":shape_rescale_t}       
+
+        sparse_structure_sampler_params = {"steps":sparse_structure_steps,"guidance_strength":sparse_structure_guidance_strength,"guidance_rescale":sparse_structure_guidance_rescale,"guidance_interval":sparse_structure_guidance_interval,"rescale_t":sparse_structure_rescale_t}
+        shape_slat_sampler_params = {"steps":shape_steps,"guidance_strength":shape_guidance_strength,"guidance_rescale":shape_guidance_rescale,"guidance_interval":shape_guidance_interval,"rescale_t":shape_rescale_t}
         tex_slat_sampler_params = {"steps":texture_steps,"guidance_strength":texture_guidance_strength,"guidance_rescale":texture_guidance_rescale,"guidance_interval":texture_guidance_interval,"rescale_t":texture_rescale_t}
-            
+
         if generate_texture_slat:
             num_steps = 5
         else:
             num_steps = 4
 
         pbar = ProgressBar(num_steps)
-        
-        mesh = pipeline.run(image=image_in, seed=seed, pipeline_type=pipeline_type, sparse_structure_sampler_params = sparse_structure_sampler_params, shape_slat_sampler_params = shape_slat_sampler_params, tex_slat_sampler_params = tex_slat_sampler_params, max_num_tokens = max_num_tokens, sparse_structure_resolution = sparse_structure_resolution, max_views = max_views, generate_texture_slat=generate_texture_slat, use_tiled=use_tiled_decoder, pbar=pbar)[0]         
-        
-        return (mesh,)    
+
+        mesh = pipeline.run(image=image_in, seed=seed, pipeline_type=pipeline_type, sparse_structure_sampler_params = sparse_structure_sampler_params, shape_slat_sampler_params = shape_slat_sampler_params, tex_slat_sampler_params = tex_slat_sampler_params, max_num_tokens = max_num_tokens, sparse_structure_resolution = sparse_structure_resolution, max_views = max_views, generate_texture_slat=generate_texture_slat, use_tiled=use_tiled_decoder, pbar=pbar)[0]
+
+        return (mesh,)
 
 class Trellis2PostProcessAndUnWrapAndRasterizer:
     @classmethod
@@ -851,7 +884,7 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
                 "mesh_cluster_threshold_cone_half_angle_rad": ("FLOAT",{"default":90.0,"min":0.0,"max":359.9}),
                 "mesh_cluster_refine_iterations": ("INT",{"default":0}),
                 "mesh_cluster_global_iterations": ("INT",{"default":1}),
-                "mesh_cluster_smooth_strength": ("INT",{"default":1}),                
+                "mesh_cluster_smooth_strength": ("INT",{"default":1}),
                 "texture_size": ("INT",{"default":2048, "min":512, "max":16384}),
                 "remesh": ("BOOLEAN",{"default":True}),
                 "remesh_band": ("FLOAT",{"default":1.0}),
@@ -876,14 +909,14 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
     def process(self, mesh, mesh_cluster_threshold_cone_half_angle_rad, mesh_cluster_refine_iterations, mesh_cluster_global_iterations, mesh_cluster_smooth_strength, texture_size, remesh, remesh_band, remesh_project, target_face_num, simplify_method, fill_holes, fill_holes_max_perimeter, texture_alpha_mode, dual_contouring_resolution, double_side_material,remove_floaters):
         pbar = ProgressBar(5)
         mesh_copy = copy.deepcopy(mesh)
-        
+
         aabb = [[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]]
-        
+
         attr_volume = mesh_copy.attrs
         coords = mesh_copy.coords
         attr_layout = mesh_copy.layout
-        voxel_size = mesh_copy.voxel_size  
-        
+        voxel_size = mesh_copy.voxel_size
+
         mesh_cluster_threshold_cone_half_angle_rad = np.radians(mesh_cluster_threshold_cone_half_angle_rad)
 
         # --- Input Normalization (AABB, Voxel Size, Grid Size) ---
@@ -892,7 +925,7 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
         if isinstance(aabb, np.ndarray):
             aabb = torch.tensor(aabb, dtype=torch.float32, device=coords.device)
 
-        # Calculate grid dimensions based on AABB and voxel size                
+        # Calculate grid dimensions based on AABB and voxel size
         if voxel_size is not None:
             if isinstance(voxel_size, float):
                 voxel_size = [voxel_size, voxel_size, voxel_size]
@@ -909,50 +942,50 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
             if isinstance(grid_size, np.ndarray):
                 grid_size = torch.tensor(grid_size, dtype=torch.int32, device=coords.device)
             voxel_size = (aabb[1] - aabb[0]) / grid_size
-        
+
         if remove_floaters:
             mesh_copy = remove_floater(mesh_copy)
-            
+
         vertices = mesh_copy.vertices
         faces = mesh_copy.faces
-        
+
         vertices = vertices.cuda()
-        faces = faces.cuda()                
-        
+        faces = faces.cuda()
+
         # Initialize CUDA mesh handler
         cumesh = CuMesh.CuMesh()
         cumesh.init(vertices, faces)
         print(f"Current vertices: {cumesh.num_vertices}, faces: {cumesh.num_faces}")
-        
+
         # --- Initial Mesh Cleaning ---
         # Fills holes as much as we can before processing
         if fill_holes:
             cumesh.fill_holes(max_hole_perimeter=fill_holes_max_perimeter)
-            print(f"After filling holes: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")        
-            
+            print(f"After filling holes: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")
+
         # Build BVH for the current mesh to guide remeshing
         print(f"Building BVH for current mesh...")
         bvh = CuMesh.cuBVH(vertices, faces)
         pbar.update(1)
-            
-        print("Cleaning mesh...")        
+
+        print("Cleaning mesh...")
         # --- Branch 1: Standard Pipeline (Simplification & Cleaning) ---
-        if not remesh:            
+        if not remesh:
             if simplify_method == 'Cumesh':
                 cumesh.simplify(target_face_num * 3, verbose=True)
             elif simplify_method == 'Meshlib':
                  # GPU -> CPU -> Meshlib -> CPU -> GPU
                 v, f = cumesh.read()
                 new_vertices, new_faces = simplify_with_meshlib(v.cpu().numpy(), f.cpu().numpy(), target_face_num)
-                cumesh.init(torch.from_numpy(new_vertices).float().cuda(), torch.from_numpy(new_faces).int().cuda())        
-            
+                cumesh.init(torch.from_numpy(new_vertices).float().cuda(), torch.from_numpy(new_faces).int().cuda())
+
             cumesh.remove_duplicate_faces()
             cumesh.repair_non_manifold_edges()
             cumesh.remove_small_connected_components(1e-5)
-            
+
             if fill_holes:
                 cumesh.fill_holes(max_hole_perimeter=fill_holes_max_perimeter)
-            
+
             if simplify_method == 'Cumesh':
                 cumesh.simplify(target_face_num, verbose=True)
             elif simplify_method == 'Meshlib':
@@ -960,30 +993,30 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
                 v, f = cumesh.read()
                 new_vertices, new_faces = simplify_with_meshlib(v.cpu().numpy(), f.cpu().numpy(), target_face_num)
                 cumesh.init(torch.from_numpy(new_vertices).float().cuda(), torch.from_numpy(new_faces).int().cuda())
-            
+
             cumesh.remove_duplicate_faces()
             cumesh.repair_non_manifold_edges()
-            cumesh.remove_small_connected_components(1e-5) 
+            cumesh.remove_small_connected_components(1e-5)
 
             if fill_holes:
-                cumesh.fill_holes(max_hole_perimeter=fill_holes_max_perimeter)            
-            
-            print(f"After initial cleanup: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")                            
-                
+                cumesh.fill_holes(max_hole_perimeter=fill_holes_max_perimeter)
+
+            print(f"After initial cleanup: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")
+
             # Step 2: Unify face orientations
             cumesh.unify_face_orientations()
-        
+
         # --- Branch 2: Remeshing Pipeline ---
         else:
             center = aabb.mean(dim=0)
             scale = (aabb[1] - aabb[0]).max().item()
-            
+
             if dual_contouring_resolution == "Auto":
                 resolution = grid_size.max().item()
                 print(f"Dual Contouring resolution: {resolution}")
             else:
                 resolution = int(dual_contouring_resolution)
-            
+
             print('Performing Dual Contouring ...')
             # Perform Dual Contouring remeshing (rebuilds topology)
             cumesh.init(*CuMesh.remeshing.remesh_narrow_band_dc(
@@ -996,11 +1029,11 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
                 verbose = True,
                 bvh = bvh,
             ))
-            
+
             print(f"After remeshing: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")
-            
+
             # Step 2: Unify face orientations
-            #cumesh.unify_face_orientations()            
+            #cumesh.unify_face_orientations()
 
             if simplify_method == 'Cumesh':
                 cumesh.simplify(target_face_num, verbose=True)
@@ -1010,10 +1043,10 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
                 new_vertices, new_faces = simplify_with_meshlib(v.cpu().numpy(), f.cpu().numpy(), target_face_num)
                 cumesh.init(torch.from_numpy(new_vertices).float().cuda(), torch.from_numpy(new_faces).int().cuda())
 
-        print(f"After simplifying: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")            
+        print(f"After simplifying: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")
         pbar.update(1)
-        
-        print('Unwrapping ...')        
+
+        print('Unwrapping ...')
         out_vertices, out_faces, out_uvs, out_vmaps = cumesh.uv_unwrap(
             compute_charts_kwargs={
                 "threshold_cone_half_angle_rad": mesh_cluster_threshold_cone_half_angle_rad,
@@ -1025,13 +1058,13 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
             verbose=True,
         )
         pbar.update(1)
-        
+
         out_vertices = out_vertices.cuda()
         out_faces = out_faces.cuda()
         out_uvs = out_uvs.cuda()
         out_vmaps = out_vmaps.cuda()
         cumesh.compute_vertex_normals()
-        out_normals = cumesh.read_vertex_normals()[out_vmaps]        
+        out_normals = cumesh.read_vertex_normals()[out_vmaps]
 
         print("Sampling attributes...")
         # Setup differentiable rasterizer context
@@ -1039,7 +1072,7 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
         # Prepare UV coordinates for rasterization (rendering in UV space)
         uvs_rast = torch.cat([out_uvs * 2 - 1, torch.zeros_like(out_uvs[:, :1]), torch.ones_like(out_uvs[:, :1])], dim=-1).unsqueeze(0)
         rast = torch.zeros((1, texture_size, texture_size, 4), device='cuda', dtype=torch.float32)
-        
+
         # Rasterize in chunks to save memory
         for i in range(0, out_faces.shape[0], 100000):
             rast_chunk, _ = dr.rasterize(
@@ -1049,20 +1082,20 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
             mask_chunk = rast_chunk[..., 3:4] > 0
             rast_chunk[..., 3:4] += i # Store face ID in alpha channel
             rast = torch.where(mask_chunk, rast_chunk, rast)
-        
+
         # Mask of valid pixels in texture
         mask = rast[0, ..., 3] > 0
-        
+
         # Interpolate 3D positions in UV space (finding 3D coord for every texel)
         pos = dr.interpolate(out_vertices.unsqueeze(0), rast, out_faces)[0][0]
         valid_pos = pos[mask]
-        
+
         # Map these positions back to the *original* high-res mesh to get accurate attributes
         # This corrects geometric errors introduced by simplification/remeshing
         _, face_id, uvw = bvh.unsigned_distance(valid_pos, return_uvw=True)
         orig_tri_verts = vertices[faces[face_id.long()]] # (N_new, 3, 3)
         valid_pos = (orig_tri_verts * uvw.unsqueeze(-1)).sum(dim=1)
-        
+
         # Trilinear sampling from the attribute volume (Color, Material props)
         attrs = torch.zeros(texture_size, texture_size, attr_volume.shape[1], device='cuda')
         attrs[mask] = grid_sample_3d(
@@ -1072,27 +1105,27 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
             grid=((valid_pos - aabb[0]) / voxel_size).reshape(1, -1, 3),
             mode='trilinear',
         )
-        
+
         # --- Texture Post-Processing & Material Construction ---
         print("Finalizing mesh...")
         pbar.update(1)
-        
+
         mask = mask.cpu().numpy()
-        
+
         # Extract channels based on layout (BaseColor, Metallic, Roughness, Alpha)
         base_color = np.clip(attrs[..., attr_layout['base_color']].cpu().numpy() * 255, 0, 255).astype(np.uint8)
         metallic = np.clip(attrs[..., attr_layout['metallic']].cpu().numpy() * 255, 0, 255).astype(np.uint8)
         roughness = np.clip(attrs[..., attr_layout['roughness']].cpu().numpy() * 255, 0, 255).astype(np.uint8)
         alpha = np.clip(attrs[..., attr_layout['alpha']].cpu().numpy() * 255, 0, 255).astype(np.uint8)
         alpha_mode = texture_alpha_mode
-        
+
         # Inpainting: fill gaps (dilation) to prevent black seams at UV boundaries
         mask_inv = (~mask).astype(np.uint8)
         base_color = cv2.inpaint(base_color, mask_inv, 3, cv2.INPAINT_TELEA)
         metallic = cv2.inpaint(metallic, mask_inv, 1, cv2.INPAINT_TELEA)[..., None]
         roughness = cv2.inpaint(roughness, mask_inv, 1, cv2.INPAINT_TELEA)[..., None]
         alpha = cv2.inpaint(alpha, mask_inv, 1, cv2.INPAINT_TELEA)[..., None]
-        
+
         # Create PBR material
         # Standard PBR packs Metallic and Roughness into Blue and Green channels
         baseColorTexture_np = Image.fromarray(np.concatenate([base_color, alpha], axis=-1))
@@ -1105,18 +1138,18 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
             roughnessFactor=1.0,
             alphaMode=alpha_mode,
             doubleSided=double_side_material,
-        )        
-        
+        )
+
         vertices_np = out_vertices.cpu().numpy()
         faces_np = out_faces.cpu().numpy()
         uvs_np = out_uvs.cpu().numpy()
         normals_np = out_normals.cpu().numpy()
-        
+
         # Swap Y and Z axes, invert Y (common conversion for GLB compatibility)
         vertices_np[:, 1], vertices_np[:, 2] = vertices_np[:, 2], -vertices_np[:, 1]
         normals_np[:, 1], normals_np[:, 2] = normals_np[:, 2], -normals_np[:, 1]
         uvs_np[:, 1] = 1 - uvs_np[:, 1] # Flip UV V-coordinate
-        
+
         textured_mesh = Trimesh.Trimesh(
             vertices=vertices_np,
             faces=faces_np,
@@ -1124,15 +1157,15 @@ class Trellis2PostProcessAndUnWrapAndRasterizer:
             process=False,
             visual=Trimesh.visual.TextureVisuals(uv=uvs_np,material=material)
         )
-        pbar.update(1)        
-        
+        pbar.update(1)
+
         del cumesh
-        gc.collect()         
+        gc.collect()
 
         baseColorTexture = pil2tensor(baseColorTexture_np)
         metallicRoughnessTexture = pil2tensor(metallicRoughnessTexture_np)
-        
-        return (textured_mesh, baseColorTexture, metallicRoughnessTexture, )    
+
+        return (textured_mesh, baseColorTexture, metallicRoughnessTexture, )
 
 class Trellis2Remesh:
     @classmethod
@@ -1145,7 +1178,7 @@ class Trellis2Remesh:
                 "fill_holes": ("BOOLEAN", {"default":True}),
                 "fill_holes_max_perimeter": ("FLOAT",{"default":0.03,"min":0.001,"max":99.999,"step":0.001}),
                 "dual_contouring_resolution": (["Auto","128","256","512","1024","2048"],{"default":"Auto"}),
-                "remove_floaters": ("BOOLEAN",{"default":True}), 
+                "remove_floaters": ("BOOLEAN",{"default":True}),
             },
         }
 
@@ -1157,26 +1190,26 @@ class Trellis2Remesh:
 
     def process(self, mesh, remesh_band, remesh_project, fill_holes, fill_holes_max_perimeter, dual_contouring_resolution, remove_floaters):
         mesh_copy = copy.deepcopy(mesh)
-        
+
         if remove_floaters:
             mesh_copy = remove_floater(mesh_copy)
-        
+
         aabb = [[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]]
-        
+
         vertices = mesh_copy.vertices
         faces = mesh_copy.faces
         attr_volume = mesh_copy.attrs
         coords = mesh_copy.coords
         attr_layout = mesh_copy.layout
-        voxel_size = mesh_copy.voxel_size        
-        
+        voxel_size = mesh_copy.voxel_size
+
         # --- Input Normalization (AABB, Voxel Size, Grid Size) ---
         if isinstance(aabb, (list, tuple)):
             aabb = np.array(aabb)
         if isinstance(aabb, np.ndarray):
             aabb = torch.tensor(aabb, dtype=torch.float32, device='cuda')
 
-        # Calculate grid dimensions based on AABB and voxel size                
+        # Calculate grid dimensions based on AABB and voxel size
         if voxel_size is not None:
             if isinstance(voxel_size, float):
                 voxel_size = [voxel_size, voxel_size, voxel_size]
@@ -1197,34 +1230,34 @@ class Trellis2Remesh:
         # Move data to GPU
         vertices = vertices.cuda()
         faces = faces.cuda()
-        
+
         # Initialize CUDA mesh handler
         cumesh = CuMesh.CuMesh()
         cumesh.init(vertices, faces)
         print(f"Current vertices: {cumesh.num_vertices}, faces: {cumesh.num_faces}")
-        
+
         # --- Initial Mesh Cleaning ---
         # Fills holes as much as we can before processing
         if fill_holes:
             cumesh.fill_holes(max_hole_perimeter=fill_holes_max_perimeter)
             print(f"After filling holes: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")
-        
+
         vertices, faces = cumesh.read()
-            
+
         # Build BVH for the current mesh to guide remeshing
         print(f"Building BVH for current mesh...")
         bvh = CuMesh.cuBVH(vertices, faces)
-            
-        print("Cleaning mesh...")        
+
+        print("Cleaning mesh...")
         center = aabb.mean(dim=0)
         scale = (aabb[1] - aabb[0]).max().item()
-        
+
         if dual_contouring_resolution == "Auto":
             resolution = grid_size.max().item()
             print(f"Dual Contouring resolution: {resolution}")
         else:
             resolution = int(dual_contouring_resolution)
-        
+
         print('Performing Dual Contouring ...')
         # Perform Dual Contouring remeshing (rebuilds topology)
         cumesh.init(*CuMesh.remeshing.remesh_narrow_band_dc(
@@ -1237,22 +1270,22 @@ class Trellis2Remesh:
             verbose = True,
             bvh = bvh,
         ))
-        
-        print(f"After remeshing: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")                          
-        
+
+        print(f"After remeshing: {cumesh.num_vertices} vertices, {cumesh.num_faces} faces")
+
         # Step 2: Unify face orientations
-        #cumesh.unify_face_orientations()        
-        
+        #cumesh.unify_face_orientations()
+
         new_vertices, new_faces = cumesh.read()
-        
+
         mesh_copy.vertices = new_vertices.to(mesh_copy.device)
-        mesh_copy.faces = new_faces.to(mesh_copy.device) 
-        
+        mesh_copy.faces = new_faces.to(mesh_copy.device)
+
         del cumesh
-        gc.collect()          
-                
+        gc.collect()
+
         return (mesh_copy,)
-        
+
 class Trellis2MeshTexturing:
     @classmethod
     def INPUT_TYPES(s):
@@ -1269,9 +1302,9 @@ class Trellis2MeshTexturing:
                 "resolution": ([512,1024],{"default":1024}),
                 "texture_size": ("INT",{"default":2048,"min":512,"max":16384}),
                 "texture_alpha_mode": (["OPAQUE","MASK","BLEND"],{"default":"OPAQUE"}),
-                "double_side_material": ("BOOLEAN",{"default":True}), 
+                "double_side_material": ("BOOLEAN",{"default":True}),
                 "texture_guidance_interval_start": ("FLOAT",{"default":0.60,"min":0.00,"max":1.00,"step":0.01}),
-                "texture_guidance_interval_end": ("FLOAT",{"default":0.90,"min":0.00,"max":1.00,"step":0.01}),                
+                "texture_guidance_interval_end": ("FLOAT",{"default":0.90,"min":0.00,"max":1.00,"step":0.01}),
             },
         }
 
@@ -1284,39 +1317,39 @@ class Trellis2MeshTexturing:
     def process(self, pipeline, image, trimesh, seed, texture_steps, texture_guidance_strength, texture_guidance_rescale, texture_rescale_t, resolution, texture_size, texture_alpha_mode, double_side_material, texture_guidance_interval_start, texture_guidance_interval_end):
         #image = tensor2pil_v2(image)
         image = tensor2pil(image)
-        
-        texture_guidance_interval = [texture_guidance_interval_start,texture_guidance_interval_end]                
-        
+
+        texture_guidance_interval = [texture_guidance_interval_start,texture_guidance_interval_end]
+
         tex_slat_sampler_params = {"steps":texture_steps,"guidance_strength":texture_guidance_strength,"guidance_rescale":texture_guidance_rescale,"guidance_interval":texture_guidance_interval,"rescale_t":texture_rescale_t}
 
-        textured_mesh, baseColorTexture_np, metallicRoughnessTexture_np = pipeline.texture_mesh(mesh=trimesh, 
-            image=image, 
-            seed=seed, 
+        textured_mesh, baseColorTexture_np, metallicRoughnessTexture_np = pipeline.texture_mesh(mesh=trimesh,
+            image=image,
+            seed=seed,
             tex_slat_sampler_params = tex_slat_sampler_params,
             resolution = resolution,
             texture_size = texture_size,
             texture_alpha_mode = texture_alpha_mode,
             double_side_material = double_side_material
         )
-            
+
 
         baseColorTexture = pil2tensor(baseColorTexture_np)
         metallicRoughnessTexture = pil2tensor(metallicRoughnessTexture_np)
-        
+
         return (textured_mesh, baseColorTexture, metallicRoughnessTexture, )
-        
+
 class Trellis2LoadMesh:
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
-                "glb_path": ("STRING", {"default": "", "tooltip": "The glb path with mesh to load."}), 
+                "glb_path": ("STRING", {"default": "", "tooltip": "The glb path with mesh to load."}),
             }
         }
     RETURN_TYPES = ("TRIMESH",)
     RETURN_NAMES = ("trimesh",)
     OUTPUT_TOOLTIPS = ("The glb model with mesh to texturize.",)
-    
+
     FUNCTION = "load"
     CATEGORY = "Trellis2Wrapper"
     DESCRIPTION = "Loads a glb model from the given path."
@@ -1324,22 +1357,22 @@ class Trellis2LoadMesh:
     def load(self, glb_path):
         if not os.path.exists(glb_path):
             glb_path = os.path.join(folder_paths.get_input_directory(), glb_path)
-        
+
         trimesh = Trimesh.load(glb_path, force="mesh")
-        
-        return (trimesh,)  
-        
+
+        return (trimesh,)
+
 class Trellis2PreProcessImage:
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
-                "image": ("IMAGE",), 
+                "image": ("IMAGE",),
             }
         }
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("image",)
-    
+
     FUNCTION = "process"
     CATEGORY = "Trellis2Wrapper"
 
@@ -1347,8 +1380,8 @@ class Trellis2PreProcessImage:
         image = tensor2pil(image)
         image = self.preprocess_image(image)
         image = pil2tensor(image)
-        
-        return (image,)         
+
+        return (image,)
 
 
     def preprocess_image(self, input: Image.Image) -> Image.Image:
@@ -1387,7 +1420,7 @@ class Trellis2PreProcessImage:
         output = np.array(output).astype(np.float32) / 255
         output = output[:, :, :3] * output[:, :, 3:4]
         output = Image.fromarray((output * 255).astype(np.uint8))
-        return output    
+        return output
 
 class Trellis2MeshRefiner:
     @classmethod
@@ -1402,11 +1435,11 @@ class Trellis2MeshRefiner:
                 "shape_steps": ("INT",{"default":12, "min":1, "max":100},),
                 "shape_guidance_strength": ("FLOAT",{"default":7.50}),
                 "shape_guidance_rescale": ("FLOAT",{"default":0.50}),
-                "shape_rescale_t": ("FLOAT",{"default":3.00}),                
+                "shape_rescale_t": ("FLOAT",{"default":3.00}),
                 "texture_steps": ("INT",{"default":12, "min":1, "max":100},),
                 "texture_guidance_strength": ("FLOAT",{"default":1.00}),
                 "texture_guidance_rescale": ("FLOAT",{"default":0.00}),
-                "texture_rescale_t": ("FLOAT",{"default":3.00}),                
+                "texture_rescale_t": ("FLOAT",{"default":3.00}),
                 "max_num_tokens": ("INT",{"default":49152,"min":0,"max":999999}),
                 "generate_texture_slat": ("BOOLEAN", {"default":True}),
                 "downsampling":([16,32,64],{"default":16}),
@@ -1425,14 +1458,14 @@ class Trellis2MeshRefiner:
     OUTPUT_NODE = True
 
     def process(self, pipeline, trimesh, image, seed, resolution,
-        shape_steps, 
-        shape_guidance_strength, 
+        shape_steps,
+        shape_guidance_strength,
         shape_guidance_rescale,
-        shape_rescale_t,        
-        texture_steps, 
-        texture_guidance_strength, 
+        shape_rescale_t,
+        texture_steps,
+        texture_guidance_strength,
         texture_guidance_rescale,
-        texture_rescale_t,        
+        texture_rescale_t,
         max_num_tokens,
         generate_texture_slat,
         downsampling,
@@ -1443,15 +1476,15 @@ class Trellis2MeshRefiner:
         use_tiled_decoder):
 
         image = tensor2pil(image)
-        
+
         shape_guidance_interval = [shape_guidance_interval_start,shape_guidance_interval_end]
-        texture_guidance_interval = [texture_guidance_interval_start,texture_guidance_interval_end]        
-        
-        shape_slat_sampler_params = {"steps":shape_steps,"guidance_strength":shape_guidance_strength,"guidance_rescale":shape_guidance_rescale,"guidance_interval":shape_guidance_interval,"rescale_t":shape_rescale_t}       
+        texture_guidance_interval = [texture_guidance_interval_start,texture_guidance_interval_end]
+
+        shape_slat_sampler_params = {"steps":shape_steps,"guidance_strength":shape_guidance_strength,"guidance_rescale":shape_guidance_rescale,"guidance_interval":shape_guidance_interval,"rescale_t":shape_rescale_t}
         tex_slat_sampler_params = {"steps":texture_steps,"guidance_strength":texture_guidance_strength,"guidance_rescale":texture_guidance_rescale,"guidance_interval":texture_guidance_interval,"rescale_t":texture_rescale_t}
-        
-        mesh = pipeline.refine_mesh(mesh = trimesh, image=image, seed=seed, shape_slat_sampler_params = shape_slat_sampler_params, tex_slat_sampler_params = tex_slat_sampler_params, resolution = resolution, max_num_tokens = max_num_tokens, generate_texture_slat=generate_texture_slat, downsampling=downsampling, use_tiled=use_tiled_decoder)[0]         
-        
+
+        mesh = pipeline.refine_mesh(mesh = trimesh, image=image, seed=seed, shape_slat_sampler_params = shape_slat_sampler_params, tex_slat_sampler_params = tex_slat_sampler_params, resolution = resolution, max_num_tokens = max_num_tokens, generate_texture_slat=generate_texture_slat, downsampling=downsampling, use_tiled=use_tiled_decoder)[0]
+
         return (mesh,)
 
 class Trellis2PostProcess2:
@@ -1476,19 +1509,19 @@ class Trellis2PostProcess2:
 
     def process(self, mesh, fill_holes, fix_normals, fix_face_orientation, remove_duplicate_faces, remove_infinite_values):
         mesh_copy = copy.deepcopy(mesh)
-        
+
         vertices_np = mesh_copy.vertices.cpu().numpy()
         faces_np = mesh_copy.faces.cpu().numpy()
-        
+
         trimesh = Trimesh.Trimesh(vertices=vertices_np,faces=faces_np)
-        
+
         print(f"Initial mesh: {len(trimesh.faces)} faces")
-        print(f"Is winding consistent? {trimesh.is_winding_consistent}")        
-        
+        print(f"Is winding consistent? {trimesh.is_winding_consistent}")
+
         if fix_normals:
             print('Fixing normals ...')
-            trimesh.fix_normals()       
-            
+            trimesh.fix_normals()
+
         if fix_face_orientation:
             if trimesh.is_watertight:
                 print('Mesh is watertight, fixing inversion ...')
@@ -1499,25 +1532,25 @@ class Trellis2PostProcess2:
         if remove_duplicate_faces:
             print('Removing duplicate faces ...')
             trimesh.remove_duplicate_faces()
-        
+
         if remove_infinite_values:
             print('Removing infinite values ...')
             trimesh.remove_infinite_values()
-        
+
         if fill_holes:
             print('Filling holes ...')
-            trimesh.fill_holes()  
-        
+            trimesh.fill_holes()
+
         new_vertices = torch.from_numpy(trimesh.vertices).float()
-        new_faces = torch.from_numpy(trimesh.faces).int()                
-        
+        new_faces = torch.from_numpy(trimesh.faces).int()
+
         mesh_copy.vertices = new_vertices.to(mesh_copy.device)
-        mesh_copy.faces = new_faces.to(mesh_copy.device) 
-        
+        mesh_copy.faces = new_faces.to(mesh_copy.device)
+
         del trimesh
         gc.collect()
-                
-        return (mesh_copy,)    
+
+        return (mesh_copy,)
 
 class Trellis2OvoxelExportToGLB:
     @classmethod
@@ -1555,7 +1588,7 @@ class Trellis2OvoxelExportToGLB:
             remesh_project=0,
             use_tqdm=True,
         )
-                
+
         return (glb,)
 
 class Trellis2TrimeshToMeshWithVoxel:
@@ -1574,17 +1607,17 @@ class Trellis2TrimeshToMeshWithVoxel:
     CATEGORY = "Trellis2Wrapper"
     OUTPUT_NODE = True
 
-    def process(self, trimesh, resolution):       
+    def process(self, trimesh, resolution):
         mesh_copy = trimesh.copy()
-        
+
         mvoxel = self.get_voxelmesh_from_trimesh(mesh_copy, resolution)
-        
-        return (mvoxel,)        
-        
+
+        return (mvoxel,)
+
     def get_voxelmesh_from_trimesh(self, mesh, resolution):
         vertices = torch.from_numpy(mesh.vertices).float()
         faces = torch.from_numpy(mesh.faces).long()
-        
+
         voxel_indices, dual_vertices, intersected = o_voxel.convert.mesh_to_flexible_dual_grid(
             vertices.cpu(), faces.cpu(),
             grid_size=resolution,
@@ -1594,15 +1627,15 @@ class Trellis2TrimeshToMeshWithVoxel:
             regularization_weight=1e-2,
             timing=True,
         )
-        
-        coords = torch.cat([torch.zeros_like(voxel_indices[:, 0:1]), voxel_indices], dim=-1)                
+
+        coords = torch.cat([torch.zeros_like(voxel_indices[:, 0:1]), voxel_indices], dim=-1)
         coords = coords.cpu()
 
         del voxel_indices
         del dual_vertices
         del intersected
         gc.collect()
-            
+
         pbr_attr_layout = {
             'base_color': slice(0, 3),
             'metallic': slice(3, 4),
@@ -1619,7 +1652,7 @@ class Trellis2TrimeshToMeshWithVoxel:
                     voxel_shape = None,
                     layout=pbr_attr_layout
                     )
-                    
+
         return mvoxel
 
 NODE_CLASS_MAPPINGS = {
