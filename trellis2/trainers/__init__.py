@@ -2,22 +2,22 @@ import importlib
 
 __attributes = {
     'BasicTrainer': 'basic',
-    
+
     'SparseStructureVaeTrainer': 'vae.sparse_structure_vae',
     'ShapeVaeTrainer': 'vae.shape_vae',
     'PbrVaeTrainer': 'vae.pbr_vae',
-    
+
     'FlowMatchingTrainer': 'flow_matching.flow_matching',
     'FlowMatchingCFGTrainer': 'flow_matching.flow_matching',
     'TextConditionedFlowMatchingCFGTrainer': 'flow_matching.flow_matching',
     'ImageConditionedFlowMatchingCFGTrainer': 'flow_matching.flow_matching',
-    
+
     'SparseFlowMatchingTrainer': 'flow_matching.sparse_flow_matching',
     'SparseFlowMatchingCFGTrainer': 'flow_matching.sparse_flow_matching',
     'TextConditionedSparseFlowMatchingCFGTrainer': 'flow_matching.sparse_flow_matching',
     'ImageConditionedSparseFlowMatchingCFGTrainer': 'flow_matching.sparse_flow_matching',
     'MultiImageConditionedSparseFlowMatchingCFGTrainer': 'flow_matching.sparse_flow_matching',
-    
+
     'DinoV2FeatureExtractor': 'flow_matching.mixins.image_conditioned',
     'DinoV3FeatureExtractor': 'flow_matching.mixins.image_conditioned',
 }
@@ -47,21 +47,21 @@ if __name__ == '__main__':
     from .vae.sparse_structure_vae import SparseStructureVaeTrainer
     from .vae.shape_vae import ShapeVaeTrainer
     from .vae.pbr_vae import PbrVaeTrainer
-    
+
     from .flow_matching.flow_matching import (
         FlowMatchingTrainer,
         FlowMatchingCFGTrainer,
         TextConditionedFlowMatchingCFGTrainer,
         ImageConditionedFlowMatchingCFGTrainer,
     )
-    
+
     from .flow_matching.sparse_flow_matching import (
         SparseFlowMatchingTrainer,
         SparseFlowMatchingCFGTrainer,
         TextConditionedSparseFlowMatchingCFGTrainer,
         ImageConditionedSparseFlowMatchingCFGTrainer,
     )
-    
+
     from .flow_matching.mixins.image_conditioned import (
         DinoV2FeatureExtractor,
         DinoV3FeatureExtractor,

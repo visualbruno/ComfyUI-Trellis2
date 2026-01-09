@@ -15,11 +15,11 @@ class FlexiDualGridVisMixin:
     @torch.no_grad()
     def visualize_sample(self, x: dict):
         mesh = x['mesh']
-        
+
         renderer = MeshRenderer({'near': 1, 'far': 3})
         renderer.rendering_options.resolution = 512
         renderer.rendering_options.ssaa = 4
-        
+
         # Build camera
         yaws = [0, np.pi / 2, np.pi, 3 * np.pi / 2]
         yaws_offset = np.random.uniform(-np.pi / 4, np.pi / 4)
@@ -39,7 +39,7 @@ class FlexiDualGridVisMixin:
             intrinsics = utils3d.torch.intrinsics_from_fov_xy(fov, fov)
             exts.append(extrinsics)
             ints.append(intrinsics)
-        
+
         # Build each representation
         images = []
         for m in mesh:
@@ -50,14 +50,14 @@ class FlexiDualGridVisMixin:
                     renderer.render(m.cuda(), ext, intr)['normal']
             images.append(image)
         images = torch.stack(images)
-        
+
         return images
-    
+
 
 class FlexiDualGridDataset(FlexiDualGridVisMixin, StandardDatasetBase):
     """
     Flexible Dual Grid Dataset
-    
+
     Args:
         roots (str): path to the dataset
         resolution (int): resolution of the voxel grid
@@ -79,16 +79,16 @@ class FlexiDualGridDataset(FlexiDualGridVisMixin, StandardDatasetBase):
         self.value_range = (0, 1)
 
         super().__init__(roots)
-        
+
         self.loads = [self.metadata.loc[sha256, f'dual_grid_size'] for _, sha256 in self.instances]
-        
+
     def __str__(self):
         lines = [
             super().__str__(),
             f'  - Resolution: {self.resolution}',
         ]
         return '\n'.join(lines)
-        
+
     def filter_metadata(self, metadata):
         stats = {}
         metadata = metadata[metadata[f'dual_grid_converted'] == True]
@@ -102,7 +102,7 @@ class FlexiDualGridDataset(FlexiDualGridVisMixin, StandardDatasetBase):
             metadata = metadata[metadata['num_faces'] <= self.max_num_faces]
             stats[f'Faces <= {self.max_num_faces}'] = len(metadata)
         return metadata, stats
-    
+
     def read_mesh(self, root, instance):
         with open(os.path.join(root, f'{instance}.pickle'), 'rb') as f:
             dump = pickle.load(f)
@@ -124,7 +124,7 @@ class FlexiDualGridDataset(FlexiDualGridVisMixin, StandardDatasetBase):
         vertices = (vertices - center) * scale
         assert torch.all(vertices >= -0.5) and torch.all(vertices <= 0.5), 'vertices out of range'
         return {'mesh': [Mesh(vertices=vertices, faces=faces)]}
-    
+
     def read_dual_grid(self, root, instance):
         coords, attr = o_voxel.io.read_vxz(os.path.join(root, f'{instance}.vxz'), num_threads=4)
         vertices = sp.SparseTensor(
@@ -142,7 +142,7 @@ class FlexiDualGridDataset(FlexiDualGridVisMixin, StandardDatasetBase):
         mesh = self.read_mesh(root['mesh_dump'], instance)
         dual_grid = self.read_dual_grid(root['dual_grid'], instance)
         return {**mesh, **dual_grid}
-    
+
     @staticmethod
     def collate_fn(batch, split_size=None):
         if split_size is None:
@@ -164,10 +164,9 @@ class FlexiDualGridDataset(FlexiDualGridVisMixin, StandardDatasetBase):
                     pack[k] = sum([b[k] for b in sub_batch], [])
                 else:
                     pack[k] = [b[k] for b in sub_batch]
-            
+
             packs.append(pack)
-        
+
         if split_size is None:
             return packs[0]
         return packs
-    

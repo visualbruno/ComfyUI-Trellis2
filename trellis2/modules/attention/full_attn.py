@@ -92,7 +92,7 @@ def scaled_dot_product_attention(*args, **kwargs):
         assert len(q.shape) == 4, f"Invalid shape for q, got {q.shape}, expected [N, L, H, Ci]"
         assert len(k.shape) == 4, f"Invalid shape for k, got {k.shape}, expected [N, L, H, Ci]"
         assert len(v.shape) == 4, f"Invalid shape for v, got {v.shape}, expected [N, L, H, Co]"
-        device = q.device    
+        device = q.device
 
     if config.BACKEND == 'xformers':
         if 'xops' not in globals():
@@ -141,5 +141,5 @@ def scaled_dot_product_attention(*args, **kwargs):
         out = _naive_sdpa(q, k, v)
     else:
         raise ValueError(f"Unknown attention module: {config.BACKEND}")
-    
+
     return out

@@ -13,7 +13,7 @@ __all__ = [
 class SparseReLU(nn.ReLU):
     def forward(self, input: VarLenTensor) -> VarLenTensor:
         return input.replace(super().forward(input.feats))
-    
+
 
 class SparseSiLU(nn.SiLU):
     def forward(self, input: VarLenTensor) -> VarLenTensor:
@@ -32,4 +32,4 @@ class SparseActivation(nn.Module):
 
     def forward(self, input: VarLenTensor) -> VarLenTensor:
         return input.replace(self.activation(input.feats))
-    
+

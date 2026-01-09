@@ -141,7 +141,7 @@ def make_grid(images, nrow=None, ncol=None, aspect_ratio=None):
         ncol = (num_images + nrow - 1) // nrow
     else:
         assert nrow * ncol >= num_images, 'nrow * ncol must be greater than or equal to the number of images'
-    
+
     if images[0].ndim == 2:
         grid = np.zeros((nrow * images[0].shape[0], ncol * images[0].shape[1]), dtype=images[0].dtype)
     else:
@@ -169,14 +169,14 @@ def text_image(text, resolution=(512, 512), max_size=0.5, h_align="left", v_alig
     and scaled so that it fits completely within the image while preserving any explicit
     line breaks and original spacing. Horizontal and vertical alignment can be controlled
     via flags.
-    
+
     Parameters:
         text (str): The input text. Newline characters and spacing are preserved.
         resolution (tuple): The image resolution as (width, height).
         max_size (float): The maximum font size.
         h_align (str): Horizontal alignment. Options: "left", "center", "right".
         v_align (str): Vertical alignment. Options: "top", "center", "bottom".
-        
+
     Returns:
         numpy.ndarray: The resulting image (BGR format) with the text drawn.
     """
@@ -201,14 +201,14 @@ def text_image(text, resolution=(512, 512), max_size=0.5, h_align="left", v_alig
         width (measured at the given scale) does not exceed max_width.
         This function preserves the original spacing by splitting the line into tokens
         (words and whitespace) using a regular expression.
-        
+
         Parameters:
             line (str): The input text line.
             max_width (int): Maximum allowed width in pixels.
             font (int): OpenCV font identifier.
             thickness (int): Text thickness.
             scale (float): The current font scale.
-            
+
         Returns:
             List[str]: A list of wrapped lines.
         """
@@ -216,7 +216,7 @@ def text_image(text, resolution=(512, 512), max_size=0.5, h_align="left", v_alig
         tokens = re.split(r'(\s+)', line)
         if not tokens:
             return ['']
-        
+
         wrapped_lines = []
         current_line = ""
         for token in tokens:
@@ -249,7 +249,7 @@ def text_image(text, resolution=(512, 512), max_size=0.5, h_align="left", v_alig
         """
         Wrap the entire text (splitting at explicit newline characters) using the
         provided scale, and then compute the overall width and height of the text block.
-        
+
         Returns:
             wrapped_lines (List[str]): The list of wrapped lines.
             block_width (int): Maximum width among the wrapped lines.
@@ -263,18 +263,18 @@ def text_image(text, resolution=(512, 512), max_size=0.5, h_align="left", v_alig
         for line in input_lines:
             wrapped = wrap_line(line, avail_width, font, thickness, scale)
             wrapped_lines.extend(wrapped)
-            
+
         sizes = []
         for line in wrapped_lines:
             (text_size, _) = cv2.getTextSize(line, font, scale, thickness)
             sizes.append(text_size)  # (width, height)
-            
+
         block_width = max((w for w, h in sizes), default=0)
         # Use the height of "A" (at the current scale) to compute line spacing
         base_height = cv2.getTextSize("A", font, scale, thickness)[0][1]
         spacing = int(line_spacing_ratio * base_height)
         block_height = sum(h for w, h in sizes) + spacing * (len(sizes) - 1) if sizes else 0
-        
+
         return wrapped_lines, block_width, block_height, sizes, spacing
 
     # Use binary search to find the maximum scale that allows the text block to fit
@@ -298,7 +298,7 @@ def text_image(text, resolution=(512, 512), max_size=0.5, h_align="left", v_alig
     if best_result is None:
         best_scale = 0.5
         best_result = compute_text_block(best_scale)
-        
+
     wrapped_lines, block_width, block_height, sizes, spacing = best_result
 
     # Compute starting y-coordinate based on vertical alignment flag

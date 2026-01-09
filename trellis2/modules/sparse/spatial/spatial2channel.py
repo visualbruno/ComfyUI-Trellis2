@@ -35,14 +35,14 @@ class SparseSpatial2Channel(nn.Module):
             )
         else:
             new_coords, idx, subidx = cache
-            
+
         new_feats = torch.zeros(new_coords.shape[0] * self.factor ** DIM, x.feats.shape[1], device=x.feats.device, dtype=x.feats.dtype)
         new_feats[idx * self.factor ** DIM + subidx] = x.feats
 
         out = SparseTensor(new_feats.reshape(new_coords.shape[0], -1), new_coords, None if x._shape is None else torch.Size([x._shape[0], x._shape[1] * self.factor ** DIM]))
         out._scale = tuple([s * self.factor for s in x._scale])
         out._spatial_cache = x._spatial_cache
-        
+
         if cache is None:
             x.register_spatial_cache(f'spatial2channel_{self.factor}', (new_coords, idx, subidx))
             out.register_spatial_cache(f'channel2spatial_{self.factor}', (x.coords, idx, subidx))
@@ -51,7 +51,7 @@ class SparseSpatial2Channel(nn.Module):
                 subdivision = torch.zeros((new_coords.shape[0], self.factor ** DIM), device=x.device, dtype=torch.bool)
                 subdivision[idx, subidx] = True
                 out.register_spatial_cache(f'subdivision', subdivision)
-                
+
         return out
 
 
