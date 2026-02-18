@@ -274,7 +274,7 @@ class Trellis2LoadModel:
         return {
             "required": {
                 "modelname": (["TRELLIS.2-4B"],),
-                "backend": (["flash_attn","xformers"],{"default":"xformers"}),
+                "backend": (["xformers","sdpa","flash_attn"],{"default":"xformers"}),
                 "device": (["cpu","cuda"],{"default":"cuda"}),
                 "low_vram": ("BOOLEAN",{"default":True}),
                 "keep_models_loaded": ("BOOLEAN", {"default":True}),
