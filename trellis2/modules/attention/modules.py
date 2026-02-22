@@ -14,7 +14,7 @@ class MultiHeadRMSNorm(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return (F.normalize(x.float(), dim = -1) * self.gamma * self.scale).to(x.dtype)
-    
+
 
 class MultiHeadAttention(nn.Module):
     def __init__(
@@ -36,10 +36,10 @@ class MultiHeadAttention(nn.Module):
         assert type in ["self", "cross"], f"Invalid attention type: {type}"
         assert attn_mode in ["full", "windowed"], f"Invalid attention mode: {attn_mode}"
         assert type == "self" or attn_mode == "full", "Cross-attention only supports full attention"
-        
+
         if attn_mode == "windowed":
             raise NotImplementedError("Windowed attention is not yet implemented")
-        
+
         self.channels = channels
         self.head_dim = channels // num_heads
         self.ctx_channels = ctx_channels if ctx_channels is not None else channels
@@ -56,19 +56,19 @@ class MultiHeadAttention(nn.Module):
         else:
             self.to_q = nn.Linear(channels, channels, bias=qkv_bias)
             self.to_kv = nn.Linear(self.ctx_channels, channels * 2, bias=qkv_bias)
-            
+
         if self.qk_rms_norm:
             self.q_rms_norm = MultiHeadRMSNorm(self.head_dim, num_heads)
             self.k_rms_norm = MultiHeadRMSNorm(self.head_dim, num_heads)
-            
+
         self.to_out = nn.Linear(channels, channels)
-    
+
     def forward(self, x: torch.Tensor, context: Optional[torch.Tensor] = None, phases: Optional[torch.Tensor] = None) -> torch.Tensor:
         B, L, C = x.shape
         if self._type == "self":
             qkv = self.to_qkv(x)
             qkv = qkv.reshape(B, L, 3, self.num_heads, -1)
-            
+
             if self.attn_mode == "full":
                 if self.qk_rms_norm or self.use_rope:
                     q, k, v = qkv.unbind(dim=2)

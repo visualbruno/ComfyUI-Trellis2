@@ -28,14 +28,14 @@ class SLatShapeVisMixin(SLatVisMixin):
     def visualize_sample(self, x_0: Union[SparseTensor, dict]):
         x_0 = x_0 if isinstance(x_0, SparseTensor) else x_0['x_0']
         reps = self.decode_latent(x_0.cuda())
-        
+
         # build camera
         yaw = [0, np.pi/2, np.pi, 3*np.pi/2]
         yaw_offset = -16 / 180 * np.pi
         yaw = [y + yaw_offset for y in yaw]
         pitch = [20 / 180 * np.pi for _ in range(4)]
         exts, ints = yaw_pitch_r_fov_to_extrinsics_intrinsics(yaw, pitch, 2, 30)
-        
+
         # render
         renderer = get_renderer(reps[0])
         images = []
@@ -48,12 +48,12 @@ class SLatShapeVisMixin(SLatVisMixin):
             images.append(image)
         images = torch.stack(images)
         return images
-    
-    
+
+
 class SLatShape(SLatShapeVisMixin, SLat):
     """
     structured latent for shape generation
-    
+
     Args:
         roots (str): path to the dataset
         resolution (int): resolution of the shape

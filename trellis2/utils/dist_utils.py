@@ -14,7 +14,7 @@ def setup_dist(rank, local_rank, world_size, master_addr, master_port):
     os.environ['LOCAL_RANK'] = str(local_rank)
     torch.cuda.set_device(local_rank)
     dist.init_process_group('nccl', rank=rank, world_size=world_size)
-    
+
 
 def read_file_dist(path):
     """
@@ -49,7 +49,7 @@ def read_file_dist(path):
             data = f.read()
         data = io.BytesIO(data)
         return data
-    
+
 
 def unwrap_dist(model):
     """
@@ -74,7 +74,7 @@ def master_first():
         else:
             dist.barrier()
             yield
-            
+
 
 @contextmanager
 def local_master_first():
@@ -90,4 +90,3 @@ def local_master_first():
         else:
             dist.barrier()
             yield
-    

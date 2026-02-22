@@ -20,7 +20,7 @@ class ModulatedTransformerBlock(nn.Module):
         shift_window: Optional[Tuple[int, int, int]] = None,
         use_checkpoint: bool = False,
         use_rope: bool = False,
-        rope_freq: Tuple[int, int] = (1.0, 10000.0), 
+        rope_freq: Tuple[int, int] = (1.0, 10000.0),
         qk_rms_norm: bool = False,
         qkv_bias: bool = True,
         share_mod: bool = False,
@@ -92,7 +92,7 @@ class ModulatedTransformerCrossBlock(nn.Module):
         shift_window: Optional[Tuple[int, int, int]] = None,
         use_checkpoint: bool = False,
         use_rope: bool = False,
-        rope_freq: Tuple[int, int] = (1.0, 10000.0), 
+        rope_freq: Tuple[int, int] = (1.0, 10000.0),
         qk_rms_norm: bool = False,
         qk_rms_norm_cross: bool = False,
         qkv_bias: bool = True,
@@ -162,4 +162,3 @@ class ModulatedTransformerCrossBlock(nn.Module):
             return torch.utils.checkpoint.checkpoint(self._forward, x, mod, context, phases, use_reentrant=False)
         else:
             return self._forward(x, mod, context, phases)
-        

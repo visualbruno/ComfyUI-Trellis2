@@ -10,7 +10,7 @@ from ..modules import sparse as sp
 from ..modules.sparse.transformer import ModulatedSparseTransformerCrossBlock
 from .sparse_structure_flow import TimestepEmbedder
 from .sparse_elastic_mixin import SparseTransformerElasticMixin
-    
+
 
 class SLatFlowModel(nn.Module):
     def __init__(
@@ -61,7 +61,7 @@ class SLatFlowModel(nn.Module):
             self.pos_embedder = AbsolutePositionEmbedder(model_channels)
 
         self.input_layer = sp.SparseLinear(in_channels, model_channels)
-            
+
         self.blocks = nn.ModuleList([
             ModulatedSparseTransformerCrossBlock(
                 model_channels,
@@ -78,7 +78,7 @@ class SLatFlowModel(nn.Module):
             )
             for _ in range(num_blocks)
         ])
-            
+
         self.out_layer = sp.SparseLinear(model_channels, out_channels)
 
         self.initialize_weights()
@@ -124,7 +124,7 @@ class SLatFlowModel(nn.Module):
             # Zero-out output layers:
             nn.init.constant_(self.out_layer.weight, 0)
             nn.init.constant_(self.out_layer.bias, 0)
-            
+
         elif self.initialization == 'scaled':
             # Initialize transformer layers:
             def _basic_init(module):
@@ -133,7 +133,7 @@ class SLatFlowModel(nn.Module):
                     if module.bias is not None:
                         nn.init.constant_(module.bias, 0)
             self.apply(_basic_init)
-            
+
             # Scaled init for to_out and ffn2
             def _scaled_init(module):
                 if isinstance(module, nn.Linear):
@@ -144,15 +144,15 @@ class SLatFlowModel(nn.Module):
                 block.self_attn.to_out.apply(_scaled_init)
                 block.cross_attn.to_out.apply(_scaled_init)
                 block.mlp.mlp[2].apply(_scaled_init)
-            
+
             # Initialize input layer to make the initial representation have variance 1
             nn.init.normal_(self.input_layer.weight, std=1.0 / np.sqrt(self.in_channels))
             nn.init.zeros_(self.input_layer.bias)
-            
+
             # Initialize timestep embedding MLP:
             nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
             nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
-            
+
             # Zero-out adaLN modulation layers in DiT blocks:
             if self.share_mod:
                 nn.init.constant_(self.adaLN_modulation[-1].weight, 0)

@@ -41,7 +41,7 @@ class SparseDownsample(nn.Module):
             )
         else:
             new_coords, idx = cache
-            
+
         new_feats = torch.scatter_reduce(
             torch.zeros(new_coords.shape[0], x.feats.shape[1], device=x.feats.device, dtype=x.feats.dtype),
             dim=0,
@@ -53,7 +53,7 @@ class SparseDownsample(nn.Module):
         out = SparseTensor(new_feats, new_coords, x._shape)
         out._scale = tuple([s * self.factor for s in x._scale])
         out._spatial_cache = x._spatial_cache
-        
+
         if cache is None:
             x.register_spatial_cache(f'downsample_{self.factor}', (new_coords, idx))
             out.register_spatial_cache(f'upsample_{self.factor}', (x.coords, idx))
@@ -98,12 +98,11 @@ class SparseUpsample(nn.Module):
                 idx = torch.repeat_interleave(torch.arange(x.coords.shape[0], device=x.device), N_leaf, dim=0, output_size=subidx.shape[0])
         else:
             new_coords, idx = cache
-            
+
         new_feats = x.feats[idx]
         out = SparseTensor(new_feats, new_coords, x._shape)
         out._scale = tuple([s / self.factor for s in x._scale])
         if cache is not None:           # only keep cache when subdiv following it
             out._spatial_cache = x._spatial_cache
-        
+
         return out
- 

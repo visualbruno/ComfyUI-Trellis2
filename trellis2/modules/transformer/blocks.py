@@ -16,7 +16,7 @@ class AbsolutePositionEmbedder(nn.Module):
         self.freq_dim = channels // in_channels // 2
         self.freqs = torch.arange(self.freq_dim, dtype=torch.float32) / self.freq_dim
         self.freqs = 1.0 / (10000 ** self.freqs)
-        
+
     def _sin_cos_embedding(self, x: torch.Tensor) -> torch.Tensor:
         """
         Create sinusoidal position embeddings.
@@ -129,7 +129,7 @@ class TransformerCrossBlock(nn.Module):
         shift_window: Optional[Tuple[int, int, int]] = None,
         use_checkpoint: bool = False,
         use_rope: bool = False,
-        rope_freq: Tuple[int, int] = (1.0, 10000.0), 
+        rope_freq: Tuple[int, int] = (1.0, 10000.0),
         qk_rms_norm: bool = False,
         qk_rms_norm_cross: bool = False,
         qkv_bias: bool = True,
@@ -183,4 +183,3 @@ class TransformerCrossBlock(nn.Module):
             return torch.utils.checkpoint.checkpoint(self._forward, x, context, phases, use_reentrant=False)
         else:
             return self._forward(x, context, phases)
-        

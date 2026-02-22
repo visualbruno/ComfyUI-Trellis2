@@ -8,7 +8,7 @@ from ..utils.elastic_utils import ElasticModuleMixin
 class SparseTransformerElasticMixin(ElasticModuleMixin):
     def _get_input_size(self, x: sp.SparseTensor, *args, **kwargs):
         return x.feats.shape[0]
-    
+
     @contextmanager
     def with_mem_ratio(self, mem_ratio=1.0):
         if mem_ratio == 1.0:

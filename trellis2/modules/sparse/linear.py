@@ -10,13 +10,13 @@ __all__ = [
 def chunked_apply(module, x: torch.Tensor, chunk_size: int) -> torch.Tensor:
     if chunk_size <= 0 or x.shape[0] <= chunk_size:
         return module(x)
-    
+
     # Process first chunk to determine output shape and dtype
     out_0 = module(x[0:chunk_size])
     out_shape = (x.shape[0],) + out_0.shape[1:]
     out = torch.empty(out_shape, device=x.device, dtype=out_0.dtype)
     out[0:chunk_size] = out_0
-    
+
     # Process remaining chunks
     for i in range(chunk_size, x.shape[0], chunk_size):
         out[i:i+chunk_size] = module(x[i:i+chunk_size])

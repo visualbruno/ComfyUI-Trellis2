@@ -16,7 +16,7 @@ def str_to_dtype(dtype_str: str):
         'fp32': torch.float32,
         'float32': torch.float32,
     }[dtype_str]
-    
+
 
 def make_master_params(model_params):
     """
@@ -64,7 +64,7 @@ def model_grads_to_master_grads(model_params, master_params):
     master_params[0].grad = _flatten_dense_tensors(
         [param.grad.data.detach().float() for param in model_params]
     )
-    
+
 
 def zero_grad(model_params):
     for param in model_params:
@@ -74,7 +74,7 @@ def zero_grad(model_params):
             else:
                 param.grad.requires_grad_(False)
             param.grad.zero_()
-            
+
 
 # LR Schedulers
 from torch.optim.lr_scheduler import LambdaLR
@@ -83,9 +83,8 @@ class LinearWarmupLRScheduler(LambdaLR):
     def __init__(self, optimizer, warmup_steps, last_epoch=-1):
         self.warmup_steps = warmup_steps
         super(LinearWarmupLRScheduler, self).__init__(optimizer, self.lr_lambda, last_epoch=last_epoch)
-        
+
     def lr_lambda(self, current_step):
         if current_step < self.warmup_steps:
             return float(current_step + 1) / self.warmup_steps
         return 1.0
-        

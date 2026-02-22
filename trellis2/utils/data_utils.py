@@ -58,7 +58,7 @@ def cycle(data_loader: DataLoader) -> Iterator:
         if isinstance(data_loader.sampler, ResumableSampler):
             data_loader.sampler.epoch += 1
             data_loader.sampler.idx = 0
-        
+
 
 class ResumableSampler(Sampler):
     """
@@ -133,7 +133,7 @@ class ResumableSampler(Sampler):
 
         # subsample
         indices = indices[self.rank : self.total_size : self.world_size]
-        
+
         # resume from previous state
         indices = indices[self.idx:]
 
@@ -147,11 +147,11 @@ class ResumableSampler(Sampler):
             'epoch': self.epoch,
             'idx': self.idx,
         }
-        
+
     def load_state_dict(self, state_dict):
         self.epoch = state_dict['epoch']
         self.idx = state_dict['idx']
-        
+
 
 class BalancedResumableSampler(ResumableSampler):
     """
@@ -185,7 +185,7 @@ class BalancedResumableSampler(ResumableSampler):
         super().__init__(dataset, shuffle, seed, drop_last)
         self.batch_size = batch_size
         self.loads = dataset.loads
-        
+
     def __iter__(self) -> Iterator:
         if self.shuffle:
             # deterministically shuffle based on epoch and seed
@@ -219,7 +219,7 @@ class BalancedResumableSampler(ResumableSampler):
             batch_loads = [self.loads[idx] for idx in batch_indices]
             groups = load_balanced_group_indices(batch_loads, self.world_size, equal_size=True)
             balanced_indices.extend([batch_indices[j] for j in groups[self.rank]])
-        
+
         # resume from previous state
         indices = balanced_indices[self.idx:]
 

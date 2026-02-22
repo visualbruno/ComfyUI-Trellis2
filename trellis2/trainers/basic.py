@@ -26,7 +26,7 @@ from ..utils import grad_clip_utils, elastic_utils
 class BasicTrainer:
     """
     Trainer for basic training loop.
-    
+
     Args:
         models (dict[str, nn.Module]): Models to train.
         dataset (torch.utils.data.Dataset): Dataset.
@@ -119,7 +119,7 @@ class BasicTrainer:
         self.i_log = i_log
         self.i_sample = i_sample
         self.i_save = i_save
-        self.i_ddpcheck = i_ddpcheck        
+        self.i_ddpcheck = i_ddpcheck
 
         if dist.is_initialized():
             # Multi-GPU params
@@ -141,14 +141,14 @@ class BasicTrainer:
 
         self.init_models_and_more(**kwargs)
         self.prepare_dataloader(**kwargs)
-        
+
         # Load checkpoint
         self.step = 0
         if load_dir is not None and step is not None:
             self.load(load_dir, step)
         elif finetune_ckpt is not None:
             self.finetune_from(finetune_ckpt)
-        
+
         if self.is_master:
             os.makedirs(os.path.join(self.output_dir, 'ckpts'), exist_ok=True)
             os.makedirs(os.path.join(self.output_dir, 'samples'), exist_ok=True)
@@ -156,7 +156,7 @@ class BasicTrainer:
 
         if self.parallel_mode == 'ddp' and self.world_size > 1:
             self.check_ddp()
-            
+
         if self.is_master:
             print('\n\nTrainer initialized.')
             print(self)
@@ -198,7 +198,7 @@ class BasicTrainer:
             if hasattr(model, 'device'):
                 return model.device
         return next(list(self.models.values())[0].parameters()).device
-            
+
     def init_models_and_more(self, **kwargs):
         """
         Initialize models and more.
@@ -244,7 +244,7 @@ class BasicTrainer:
             self.optimizer = getattr(torch.optim, self.optimizer_config['name'])(self.master_params, **self.optimizer_config['args'])
         else:
             self.optimizer = globals()[self.optimizer_config['name']](self.master_params, **self.optimizer_config['args'])
-        
+
         # Initalize learning rate scheduler
         if self.lr_scheduler_config is not None:
             if hasattr(torch.optim.lr_scheduler, self.lr_scheduler_config['name']):
@@ -323,7 +323,7 @@ class BasicTrainer:
         """
         if self.is_master:
             print(f'\nLoading checkpoint from step {step}...', end='')
-            
+
         model_ckpts = {}
         for name, model in self.models.items():
             model_ckpt = torch.load(read_file_dist(os.path.join(load_dir, 'ckpts', f'{name}_step{step:07d}.pt')), map_location=self.device, weights_only=True)
@@ -340,7 +340,7 @@ class BasicTrainer:
                     ema_ckpts[name] = ema_ckpt
                 self._state_dicts_to_master_params(self.ema_params[i], ema_ckpts)
                 del ema_ckpts
-        
+
         misc_ckpt = torch.load(read_file_dist(os.path.join(load_dir, 'ckpts', f'misc_step{step:07d}.pt')), map_location=torch.device('cpu'), weights_only=False)
         self.optimizer.load_state_dict(misc_ckpt['optimizer'])
         self.step = misc_ckpt['step']
@@ -372,7 +372,7 @@ class BasicTrainer:
         """
         assert self.is_master, 'save() should be called only by the rank 0 process.'
         print(f'\nSaving checkpoint at step {self.step}...', end='')
-        
+
         model_ckpts = self._master_params_to_state_dicts(self.master_params)
         for name, model_ckpt in model_ckpts.items():
             model_ckpt = {k: v.cpu() for k, v in model_ckpt.items()}  # Move to CPU for saving
@@ -383,7 +383,7 @@ class BasicTrainer:
                 ).start()
             else:
                 torch.save(model_ckpt, os.path.join(self.output_dir, 'ckpts', f'{name}_step{self.step:07d}.pt'))
-        
+
         for i, ema_rate in enumerate(self.ema_rate):
             ema_ckpts = self._master_params_to_state_dicts(self.ema_params[i])
             for name, ema_ckpt in ema_ckpts.items():
@@ -429,7 +429,7 @@ class BasicTrainer:
             print('\nFinetuning from:')
             for name, path in finetune_ckpt.items():
                 print(f'  - {name}: {path}')
-        
+
         model_ckpts = {}
         for name, model in self.models.items():
             model_state_dict = model.state_dict()
@@ -649,7 +649,7 @@ class BasicTrainer:
             self._data_prefetched = recursive_to_device(next(self.data_iterator), self.device, non_blocking=True)
         else:
             data = recursive_to_device(next(self.data_iterator), self.device, non_blocking=True)
-        
+
         # if the data is a dict, we need to split it into multiple dicts with batch_size_per_gpu
         if isinstance(data, dict):
             if self.batch_split == 1:
@@ -664,7 +664,7 @@ class BasicTrainer:
             data_list = data
         else:
             raise ValueError('Data must be a dict or a list of dicts.')
-        
+
         return data_list
 
     def run_step(self, data_list):
@@ -745,7 +745,7 @@ class BasicTrainer:
             if not any(not p.grad.isfinite().all() for p in self.model_params):
                 self.optimizer.step()
             else:
-                print('\n\033[93mWarning: NaN detected in gradients. Skipping update.\033[0m') 
+                print('\n\033[93mWarning: NaN detected in gradients. Skipping update.\033[0m')
         ## adjust learning rate
         if self.lr_scheduler_config is not None:
             statuses[-1]['lr'] = self.lr_scheduler.get_last_lr()[0]
@@ -758,7 +758,7 @@ class BasicTrainer:
             step_log['elastic'] = dict_reduce(elastic_controller_logs, lambda x: np.mean(x))
         if self.grad_clip is not None:
             step_log['grad_clip'] = self.grad_clip if isinstance(self.grad_clip, float) else self.grad_clip.log()
-            
+
         # Check grad and norm of each param
         if self.log_param_stats:
             param_norms = {}
@@ -792,7 +792,7 @@ class BasicTrainer:
         for key, value in log_show.items():
             self.writer.add_scalar(key, value, self.step)
         self.log = []
-        
+
     def check_abort(self):
         """
         Check if training should be aborted due to certain conditions.
@@ -884,7 +884,7 @@ class BasicTrainer:
                 # Save checkpoint
                 if self.step % self.i_save == 0:
                     self.save()
-                    
+
             # Check abort
             self.check_abort()
 
@@ -894,7 +894,7 @@ class BasicTrainer:
         if self.is_master:
             self.writer.close()
             print('Training finished.')
-            
+
     def profile(self, wait=2, warmup=3, active=5):
         """
         Profile the training loop.

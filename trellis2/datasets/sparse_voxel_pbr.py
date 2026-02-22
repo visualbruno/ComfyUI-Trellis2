@@ -31,17 +31,17 @@ def nearest_power_of_two(n: int) -> int:
         return lower
     else:
         return upper
-    
+
 
 class SparseVoxelPbrVisMixin:
     @torch.no_grad()
     def visualize_sample(self, x: Union[sp.SparseTensor, dict]):
         x = x if isinstance(x, sp.SparseTensor) else x['x']
-        
+
         renderer = VoxelRenderer()
         renderer.rendering_options.resolution = 512
         renderer.rendering_options.ssaa = 4
-        
+
         # Build camera
         yaws = [0, np.pi / 2, np.pi, 3 * np.pi / 2]
         yaws_offset = np.random.uniform(-np.pi / 4, np.pi / 4)
@@ -63,7 +63,7 @@ class SparseVoxelPbrVisMixin:
             ints.append(intrinsics)
 
         images = {k: [] for k in self.layout}
-        
+
         # Build each representation
         x = x.cuda()
         for i in range(x.shape[0]):
@@ -84,17 +84,17 @@ class SparseVoxelPbrVisMixin:
                     res = renderer.render(rep, ext, intr)
                     image[:, 512 * (j // tile[1]):512 * (j // tile[1] + 1), 512 * (j % tile[1]):512 * (j % tile[1] + 1)] = res['color']
                 images[k].append(image)
-        
+
         for k in self.layout:
             images[k] = torch.stack(images[k])
-            
+
         return images
 
 
 class SparseVoxelPbrDataset(SparseVoxelPbrVisMixin, StandardDatasetBase):
     """
     Sparse Voxel PBR dataset.
-    
+
     Args:
         roots (str): path to the dataset
         resolution (int): resolution of the voxel grid
@@ -131,9 +131,9 @@ class SparseVoxelPbrDataset(SparseVoxelPbrVisMixin, StandardDatasetBase):
             start += self.channels[attr]
 
         super().__init__(roots)
-        
+
         self.loads = [self.metadata.loc[sha256, f'num_pbr_voxels'] for _, sha256 in self.instances]
-        
+
     def __str__(self):
         lines = [
             super().__str__(),
@@ -141,7 +141,7 @@ class SparseVoxelPbrDataset(SparseVoxelPbrVisMixin, StandardDatasetBase):
             f'  - Attributes: {list(self.layout.keys())}',
         ]
         return '\n'.join(lines)
-        
+
     def filter_metadata(self, metadata):
         stats = {}
         metadata = metadata[metadata['pbr_voxelized'] == True]
@@ -181,7 +181,7 @@ class SparseVoxelPbrDataset(SparseVoxelPbrVisMixin, StandardDatasetBase):
     def read_mesh_with_texture(self, root, instance):
         with open(os.path.join(root, f'{instance}.pickle'), 'rb') as f:
             dump = pickle.load(f)
-            
+
         # Fix dump alpha map
         for mat in dump['materials']:
             if mat['alphaTexture'] is not None and mat['alphaMode'] == 'OPAQUE':
@@ -230,12 +230,12 @@ class SparseVoxelPbrDataset(SparseVoxelPbrVisMixin, StandardDatasetBase):
             material_ids.append(obj['mat_ids'])
             uv_coords.append(obj['uvs'] if obj['uvs'] is not None else np.zeros((obj['faces'].shape[0], 3, 2), dtype=np.float32))
             start += len(obj['vertices'])
-        
+
         vertices = torch.from_numpy(np.concatenate(vertices, axis=0)).float()
         faces = torch.from_numpy(np.concatenate(faces, axis=0)).long()
         material_ids = torch.from_numpy(np.concatenate(material_ids, axis=0)).long()
         uv_coords = torch.from_numpy(np.concatenate(uv_coords, axis=0)).float()
-        
+
         # Normalize vertices
         vertices_min = vertices.min(dim=0)[0]
         vertices_max = vertices.max(dim=0)[0]
@@ -243,7 +243,7 @@ class SparseVoxelPbrDataset(SparseVoxelPbrVisMixin, StandardDatasetBase):
         scale = 0.99999 / (vertices_max - vertices_min).max()
         vertices = (vertices - center) * scale
         assert torch.all(vertices >= -0.5) and torch.all(vertices <= 0.5), 'vertices out of range'
-        
+
         return {'mesh': [MeshWithPbrMaterial(
             vertices=vertices,
             faces=faces,
@@ -260,7 +260,7 @@ class SparseVoxelPbrDataset(SparseVoxelPbrVisMixin, StandardDatasetBase):
             torch.cat([torch.zeros_like(coords[:, 0:1]), coords], dim=-1),
         )
         return {'x': x}
-    
+
     def get_instance(self, root, instance):
         if self.with_mesh:
             mesh = self.read_mesh_with_texture(root['pbr_dump'], instance)
@@ -268,7 +268,7 @@ class SparseVoxelPbrDataset(SparseVoxelPbrVisMixin, StandardDatasetBase):
             return {**mesh, **pbr_voxel}
         else:
             return self.read_pbr_voxel(root['pbr_voxel'], instance)
-    
+
     @staticmethod
     def collate_fn(batch, split_size=None):
         if split_size is None:
@@ -290,9 +290,9 @@ class SparseVoxelPbrDataset(SparseVoxelPbrVisMixin, StandardDatasetBase):
                     pack[k] = sum([b[k] for b in sub_batch], [])
                 else:
                     pack[k] = [b[k] for b in sub_batch]
-            
+
             packs.append(pack)
-        
+
         if split_size is None:
             return packs[0]
         return packs

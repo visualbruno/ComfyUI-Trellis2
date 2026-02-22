@@ -17,7 +17,7 @@ __all__ = [
 class VarLenTensor:
     """
     Sequential tensor with variable length.
-    
+
     Args:
         feats (torch.Tensor): Features of the varlen tensor.
         layout (List[slice]): Layout of the varlen tensor for each batch
@@ -26,7 +26,7 @@ class VarLenTensor:
         self.feats = feats
         self.layout = layout if layout is not None else [slice(0, feats.shape[0])]
         self._cache = {}
-        
+
     @staticmethod
     def layout_from_seqlen(seqlen: list) -> List[slice]:
         """
@@ -38,7 +38,7 @@ class VarLenTensor:
             layout.append(slice(start, start + l))
             start += l
         return layout
-        
+
     @staticmethod
     def from_tensor_list(tensor_list: List[torch.Tensor]) -> 'VarLenTensor':
         """
@@ -51,7 +51,7 @@ class VarLenTensor:
             layout.append(slice(start, start + tensor.shape[0]))
             start += tensor.shape[0]
         return VarLenTensor(feats, layout)
-    
+
     def to_tensor_list(self) -> List[torch.Tensor]:
         """
         Convert a VarLenTensor to a list of tensors.
@@ -60,17 +60,17 @@ class VarLenTensor:
         for s in self.layout:
             tensor_list.append(self.feats[s])
         return tensor_list
-    
+
     def __len__(self) -> int:
         return len(self.layout)
-    
+
     @property
     def shape(self) -> torch.Size:
         return torch.Size([len(self.layout), *self.feats.shape[1:]])
-    
+
     def dim(self) -> int:
         return len(self.shape)
-    
+
     @property
     def ndim(self) -> int:
         return self.dim()
@@ -82,13 +82,13 @@ class VarLenTensor:
     @property
     def device(self):
         return self.feats.device
-    
+
     @property
     def seqlen(self) -> torch.LongTensor:
         if 'seqlen' not in self._cache:
             self._cache['seqlen'] = torch.tensor([l.stop - l.start for l in self.layout], dtype=torch.long, device=self.device)
         return self._cache['seqlen']
-    
+
     @property
     def cum_seqlen(self) -> torch.LongTensor:
         if 'cum_seqlen' not in self._cache:
@@ -97,7 +97,7 @@ class VarLenTensor:
                 self.seqlen.cumsum(dim=0)
             ], dim=0)
         return self._cache['cum_seqlen']
-    
+
     @property
     def batch_boardcast_map(self) -> torch.LongTensor:
         """
@@ -109,7 +109,7 @@ class VarLenTensor:
                 self.seqlen,
             )
         return self._cache['batch_boardcast_map']
-    
+
     @overload
     def to(self, dtype: torch.dtype, *, non_blocking: bool = False, copy: bool = False) -> 'VarLenTensor': ...
 
@@ -134,7 +134,7 @@ class VarLenTensor:
             device = kwargs['device']
         non_blocking = kwargs.get('non_blocking', False)
         copy = kwargs.get('copy', False)
-        
+
         new_feats = self.feats.to(device=device, dtype=dtype, non_blocking=non_blocking, copy=copy)
         return self.replace(new_feats)
 
@@ -145,7 +145,7 @@ class VarLenTensor:
     def cpu(self) -> 'VarLenTensor':
         new_feats = self.feats.cpu()
         return self.replace(new_feats)
-    
+
     def cuda(self) -> 'VarLenTensor':
         new_feats = self.feats.cuda()
         return self.replace(new_feats)
@@ -153,11 +153,11 @@ class VarLenTensor:
     def half(self) -> 'VarLenTensor':
         new_feats = self.feats.half()
         return self.replace(new_feats)
-    
+
     def float(self) -> 'VarLenTensor':
         new_feats = self.feats.float()
         return self.replace(new_feats)
-    
+
     def detach(self) -> 'VarLenTensor':
         new_feats = self.feats.detach()
         return self.replace(new_feats)
@@ -165,7 +165,7 @@ class VarLenTensor:
     def reshape(self, *shape) -> 'VarLenTensor':
         new_feats = self.feats.reshape(self.feats.shape[0], *shape)
         return self.replace(new_feats)
-    
+
     def unbind(self, dim: int) -> List['VarLenTensor']:
         return varlen_unbind(self, dim)
 
@@ -176,11 +176,11 @@ class VarLenTensor:
         )
         new_tensor._cache = self._cache
         return new_tensor
-    
+
     def to_dense(self, max_length=None) -> torch.Tensor:
         """
         Convert a VarLenTensor to a dense representation without for-loop.
-        
+
         Returns:
             dense (torch.Tensor): (N, L, C) dense tensor
             mask (torch.BoolTensor): (N, L) mask indicating valid positions
@@ -197,7 +197,7 @@ class VarLenTensor:
 
     def __neg__(self) -> 'VarLenTensor':
         return self.replace(-self.feats)
-    
+
     def __elemwise__(self, other: Union[torch.Tensor, 'VarLenTensor'], op: callable) -> 'VarLenTensor':
         if isinstance(other, torch.Tensor):
             try:
@@ -216,10 +216,10 @@ class VarLenTensor:
 
     def __radd__(self, other: Union[torch.Tensor, 'VarLenTensor', float]) -> 'VarLenTensor':
         return self.__elemwise__(other, torch.add)
-    
+
     def __sub__(self, other: Union[torch.Tensor, 'VarLenTensor', float]) -> 'VarLenTensor':
         return self.__elemwise__(other, torch.sub)
-    
+
     def __rsub__(self, other: Union[torch.Tensor, 'VarLenTensor', float]) -> 'VarLenTensor':
         return self.__elemwise__(other, lambda x, y: torch.sub(y, x))
 
@@ -252,7 +252,7 @@ class VarLenTensor:
                 raise ValueError(f"Unknown index type: {idx.dtype}")
         else:
             raise ValueError(f"Unknown index type: {type(idx)}")
-        
+
         new_feats = []
         new_layout = []
         start = 0
@@ -263,11 +263,11 @@ class VarLenTensor:
         new_feats = torch.cat(new_feats, dim=0).contiguous()
         new_tensor = VarLenTensor(feats=new_feats, layout=new_layout)
         return new_tensor
-    
+
     def reduce(self, op: str, dim: Optional[Union[int, Tuple[int,...]]] = None, keepdim: bool = False) -> torch.Tensor:
         if isinstance(dim, int):
             dim = (dim,)
-        
+
         if op =='mean':
             red = self.feats.mean(dim=dim, keepdim=keepdim)
         elif op =='sum':
@@ -276,28 +276,28 @@ class VarLenTensor:
             red = self.feats.prod(dim=dim, keepdim=keepdim)
         else:
             raise ValueError(f"Unsupported reduce operation: {op}")
-        
+
         if dim is None or 0 in dim:
             return red
-        
+
         red = torch.segment_reduce(red, reduce=op, lengths=self.seqlen)
         return red
-    
+
     def mean(self, dim: Optional[Union[int, Tuple[int,...]]] = None, keepdim: bool = False) -> torch.Tensor:
         return self.reduce(op='mean', dim=dim, keepdim=keepdim)
-        
+
     def sum(self, dim: Optional[Union[int, Tuple[int,...]]] = None, keepdim: bool = False) -> torch.Tensor:
         return self.reduce(op='sum', dim=dim, keepdim=keepdim)
-        
+
     def prod(self, dim: Optional[Union[int, Tuple[int,...]]] = None, keepdim: bool = False) -> torch.Tensor:
         return self.reduce(op='prod', dim=dim, keepdim=keepdim)
-    
+
     def std(self, dim: Optional[Union[int, Tuple[int,...]]] = None, keepdim: bool = False) -> torch.Tensor:
         mean = self.mean(dim=dim, keepdim=True)
         mean2 = self.replace(self.feats ** 2).mean(dim=dim, keepdim=True)
         std = (mean2 - mean ** 2).sqrt()
         return std
-    
+
     def __repr__(self) -> str:
         return f"VarLenTensor(shape={self.shape}, dtype={self.dtype}, device={self.device})"
 
@@ -305,7 +305,7 @@ class VarLenTensor:
 def varlen_cat(inputs: List[VarLenTensor], dim: int = 0) -> VarLenTensor:
     """
     Concatenate a list of varlen tensors.
-    
+
     Args:
         inputs (List[VarLenTensor]): List of varlen tensors to concatenate.
     """
@@ -328,7 +328,7 @@ def varlen_cat(inputs: List[VarLenTensor], dim: int = 0) -> VarLenTensor:
 def varlen_unbind(input: VarLenTensor, dim: int) -> Union[List[VarLenTensor]]:
     """
     Unbind a varlen tensor along a dimension.
-    
+
     Args:
         input (VarLenTensor): Varlen tensor to unbind.
         dim (int): Dimension to unbind.
@@ -338,12 +338,12 @@ def varlen_unbind(input: VarLenTensor, dim: int) -> Union[List[VarLenTensor]]:
     else:
         feats = input.feats.unbind(dim)
         return [input.replace(f) for f in feats]
-    
+
 
 class SparseTensor(VarLenTensor):
     """
     Sparse tensor with support for both torchsparse and spconv backends.
-    
+
     Parameters:
     - feats (torch.Tensor): Features of the sparse tensor.
     - coords (torch.Tensor): Coordinates of the sparse tensor.
@@ -371,7 +371,7 @@ class SparseTensor(VarLenTensor):
                 self.SparseTensorData = importlib.import_module('torchsparse').SparseTensor
             elif config.CONV == 'spconv':
                 self.SparseTensorData = importlib.import_module('spconv.pytorch').SparseConvTensor
-                
+
         method_id = 0
         if len(args) != 0:
             method_id = 0 if isinstance(args[0], torch.Tensor) else 1
@@ -430,7 +430,7 @@ class SparseTensor(VarLenTensor):
                 print(f"- Scale: {self._scale}")
                 print(f"- Coords: {self.coords}")
                 raise e
-        
+
     @staticmethod
     def from_tensor_list(feats_list: List[torch.Tensor], coords_list: List[torch.Tensor]) -> 'SparseTensor':
         """
@@ -443,7 +443,7 @@ class SparseTensor(VarLenTensor):
             coords.append(coord)
         coords = torch.cat(coords, dim=0)
         return SparseTensor(feats, coords)
-    
+
     def to_tensor_list(self) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
         """
         Convert a SparseTensor to list of tensors.
@@ -454,31 +454,31 @@ class SparseTensor(VarLenTensor):
             feats_list.append(self.feats[s])
             coords_list.append(self.coords[s])
         return feats_list, coords_list
-    
+
     def __len__(self) -> int:
         return len(self.layout)
-        
+
     def __cal_shape(self, feats, coords):
         shape = []
         shape.append(coords[:, 0].max().item() + 1)
         shape.extend([*feats.shape[1:]])
         return torch.Size(shape)
-    
+
     def __cal_layout(self, coords, batch_size):
         seq_len = torch.bincount(coords[:, 0], minlength=batch_size)
-        offset = torch.cumsum(seq_len, dim=0) 
+        offset = torch.cumsum(seq_len, dim=0)
         layout = [slice((offset[i] - seq_len[i]).item(), offset[i].item()) for i in range(batch_size)]
         return layout
-    
+
     def __cal_spatial_shape(self, coords):
         return torch.Size((coords[:, 1:].max(0)[0] + 1).tolist())
-    
+
     @property
     def shape(self) -> torch.Size:
         if self._shape is None:
             self._shape = self.__cal_shape(self.feats, self.coords)
         return self._shape
-    
+
     @property
     def layout(self) -> List[slice]:
         layout = self.get_spatial_cache('layout')
@@ -486,7 +486,7 @@ class SparseTensor(VarLenTensor):
             layout = self.__cal_layout(self.coords, self.shape[0])
             self.register_spatial_cache('layout', layout)
         return layout
-    
+
     @property
     def spatial_shape(self) -> torch.Size:
         spatial_shape = self.get_spatial_cache('shape')
@@ -503,7 +503,7 @@ class SparseTensor(VarLenTensor):
             return self.data.features
         else:
             return self.data['feats']
-    
+
     @feats.setter
     def feats(self, value: torch.Tensor):
         if config.CONV == 'torchsparse':
@@ -521,7 +521,7 @@ class SparseTensor(VarLenTensor):
             return self.data.indices
         else:
             return self.data['coords']
-        
+
     @coords.setter
     def coords(self, value: torch.Tensor):
         if config.CONV == 'torchsparse':
@@ -538,7 +538,7 @@ class SparseTensor(VarLenTensor):
     @property
     def device(self):
         return self.feats.device
-    
+
     @property
     def seqlen(self) -> torch.LongTensor:
         seqlen = self.get_spatial_cache('seqlen')
@@ -546,7 +546,7 @@ class SparseTensor(VarLenTensor):
             seqlen = torch.tensor([l.stop - l.start for l in self.layout], dtype=torch.long, device=self.device)
             self.register_spatial_cache('seqlen', seqlen)
         return seqlen
-    
+
     @property
     def cum_seqlen(self) -> torch.LongTensor:
         cum_seqlen = self.get_spatial_cache('cum_seqlen')
@@ -557,7 +557,7 @@ class SparseTensor(VarLenTensor):
             ], dim=0)
             self.register_spatial_cache('cum_seqlen', cum_seqlen)
         return cum_seqlen
-    
+
     @property
     def batch_boardcast_map(self) -> torch.LongTensor:
         """
@@ -596,7 +596,7 @@ class SparseTensor(VarLenTensor):
             device = kwargs['device']
         non_blocking = kwargs.get('non_blocking', False)
         copy = kwargs.get('copy', False)
-        
+
         new_feats = self.feats.to(device=device, dtype=dtype, non_blocking=non_blocking, copy=copy)
         new_coords = self.coords.to(device=device, non_blocking=non_blocking, copy=copy)
         return self.replace(new_feats, new_coords)
@@ -609,7 +609,7 @@ class SparseTensor(VarLenTensor):
         new_feats = self.feats.cpu()
         new_coords = self.coords.cpu()
         return self.replace(new_feats, new_coords)
-    
+
     def cuda(self) -> 'SparseTensor':
         new_feats = self.feats.cuda()
         new_coords = self.coords.cuda()
@@ -618,11 +618,11 @@ class SparseTensor(VarLenTensor):
     def half(self) -> 'SparseTensor':
         new_feats = self.feats.half()
         return self.replace(new_feats)
-    
+
     def float(self) -> 'SparseTensor':
         new_feats = self.feats.float()
         return self.replace(new_feats)
-    
+
     def detach(self) -> 'SparseTensor':
         new_coords = self.coords.detach()
         new_feats = self.feats.detach()
@@ -631,7 +631,7 @@ class SparseTensor(VarLenTensor):
     def reshape(self, *shape) -> 'SparseTensor':
         new_feats = self.feats.reshape(self.feats.shape[0], *shape)
         return self.replace(new_feats)
-    
+
     def unbind(self, dim: int) -> List['SparseTensor']:
         return sparse_unbind(self, dim)
 
@@ -675,7 +675,7 @@ class SparseTensor(VarLenTensor):
             spatial_cache=self._spatial_cache
         )
         return new_tensor
-    
+
     def to_dense(self) -> torch.Tensor:
         if config.CONV == 'torchsparse':
             return self.data.dense()
@@ -713,7 +713,7 @@ class SparseTensor(VarLenTensor):
                 else:
                     new_cache[k].update(other._spatial_cache[k])
         return new_cache
-    
+
     def __elemwise__(self, other: Union[torch.Tensor, VarLenTensor], op: callable) -> 'SparseTensor':
         if isinstance(other, torch.Tensor):
             try:
@@ -746,7 +746,7 @@ class SparseTensor(VarLenTensor):
                 raise ValueError(f"Unknown index type: {idx.dtype}")
         else:
             raise ValueError(f"Unknown index type: {type(idx)}")
-        
+
         new_coords = []
         new_feats = []
         new_layout = []
@@ -763,7 +763,7 @@ class SparseTensor(VarLenTensor):
         new_tensor = SparseTensor(feats=new_feats, coords=new_coords, shape=new_shape)
         new_tensor.register_spatial_cache('layout', new_layout)
         return new_tensor
-    
+
     def clear_spatial_cache(self) -> None:
         """
         Clear all spatial caches.
@@ -790,14 +790,14 @@ class SparseTensor(VarLenTensor):
         if key is None:
             return cur_scale_cache
         return cur_scale_cache.get(key, None)
-    
+
     def __repr__(self) -> str:
         return f"SparseTensor(shape={self.shape}, dtype={self.dtype}, device={self.device})"
 
 def sparse_cat(inputs: List[SparseTensor], dim: int = 0) -> SparseTensor:
     """
     Concatenate a list of sparse tensors.
-    
+
     Args:
         inputs (List[SparseTensor]): List of sparse tensors to concatenate.
     """
@@ -824,7 +824,7 @@ def sparse_cat(inputs: List[SparseTensor], dim: int = 0) -> SparseTensor:
 def sparse_unbind(input: SparseTensor, dim: int) -> List[SparseTensor]:
     """
     Unbind a sparse tensor along a dimension.
-    
+
     Args:
         input (SparseTensor): Sparse tensor to unbind.
         dim (int): Dimension to unbind.
