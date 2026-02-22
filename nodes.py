@@ -37,6 +37,8 @@ import comfy.utils
 
 from .trellis2.pipelines import Trellis2ImageTo3DPipeline
 from .trellis2.representations import Mesh, MeshWithVoxel
+from .trellis2.modules.attention import config as attn_config
+from .trellis2.modules.sparse import config as sparse_config
 
 script_directory = os.path.dirname(os.path.abspath(__file__))
 comfy_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -320,7 +322,7 @@ class Trellis2LoadModel:
         return {
             "required": {
                 "modelname": (["TRELLIS.2-4B"],),
-                "backend": (["flash_attn","xformers"],{"default":"xformers"}),
+                "backend": (["flash_attn","xformers","sdpa"],{"default":"sdpa"}),
                 "device": (["cpu","cuda"],{"default":"cuda"}),
                 "low_vram": ("BOOLEAN",{"default":True}),
                 "keep_models_loaded": ("BOOLEAN", {"default":True}),
@@ -339,6 +341,10 @@ class Trellis2LoadModel:
         #os.environ["FLEX_GEMM_AUTOTUNE_CACHE_PATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'autotune_cache.json')
         #os.environ["FLEX_GEMM_AUTOTUNER_VERBOSE"] = '1'        
         os.environ['ATTN_BACKEND'] = backend
+        
+        # Force update the configuration modules
+        attn_config.set_backend(backend)
+        sparse_config.set_attn_backend(backend)
         
         reset_cuda()
         
