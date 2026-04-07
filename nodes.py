@@ -9,6 +9,7 @@ import json
 import trimesh as Trimesh
 from tqdm import tqdm
 import time
+import math
 import shutil
 import uuid
 import triton
@@ -318,6 +319,72 @@ def _batched_unsigned_distance(bvh, positions, batch_size=100000, return_uvw=Fal
         torch.cat(face_id_list),
         torch.cat(uvw_list) if return_uvw else None
     )    
+
+def get_camera_vectors(azimuth: float, elevation: float, device='cuda'):
+    az = math.radians(azimuth)
+    el = math.radians(elevation)
+
+    look = torch.tensor([
+        math.cos(el) * math.sin(az),
+        math.sin(el),
+        math.cos(el) * math.cos(az)
+    ], device=device, dtype=torch.float32)
+    look = look / (look.norm() + 1e-8)
+    
+    world_up = torch.tensor([0., 1., 0.], device=device, dtype=torch.float32)
+    # If look is parallel to world_up, choose alternative up vector
+    if torch.abs(torch.dot(look, world_up)) > 0.99:
+        world_up = torch.tensor([0., 0., 1.], device=device, dtype=torch.float32)
+    
+    right = torch.cross(world_up, look)
+    right = right / (right.norm() + 1e-8)
+
+    up = torch.cross(look, right)
+    up = up / (up.norm() + 1e-8)
+
+    return look, right, up
+
+def build_camera_RT(az, el, dist, device):
+    look, right, up = get_camera_vectors(az, el, device)
+
+    eye = -look * dist
+
+    # Rotation matrix
+    R = torch.stack([right, -up, -look], dim=0)
+
+    # Translation
+    T = -R @ eye
+
+    return R, T
+
+def ortho_projection(scale, device):
+    l = -scale * 0.5
+    r =  scale * 0.5
+    b = -scale * 0.5
+    t =  scale * 0.5
+    n = 0.1
+    f = 100.0
+
+    return torch.tensor([
+        [2/(r-l),     0,          0,        -(r+l)/(r-l)],
+        [0,           2/(t-b),    0,        -(t+b)/(t-b)],
+        [0,           0,         -2/(f-n),  -(f+n)/(f-n)],
+        [0,           0,          0,         1]
+    ], dtype=torch.float32, device=device)
+
+# Check the existing PBR base color texture
+def getBaseColorTexture(mesh):
+    if not hasattr(mesh.visual, "material"):
+        mesh.visual.to_texture()
+    if hasattr(mesh.visual, "material"):
+        mat = mesh.visual.material
+        existing_base = getattr(mat, 'baseColorTexture', None)
+        if existing_base is None:
+            # Fallback: try accessing via image attribute (SimpleMaterial / PBRMaterial variants)
+            existing_base = getattr(mat, 'image', None)
+    else:
+        existing_base = None
+    return existing_base
 
 class Trellis2LoadModel:
     @classmethod
@@ -4826,7 +4893,150 @@ class Trellis2RenderMultiView:
             os.remove(output_path)
             
         return image          
-            
+
+class Trellis2RenderMultiViewNvdiffrast:
+    
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "trimesh": ("TRIMESH",),
+                "render_size": ("INT", {"default": 4096, "min": 512, "max": 8192}),
+                "ortho_scale": ("FLOAT", {"default": 1.1, "min": 0.05, "max": 10.0, "step": 0.01}),
+                "azimuths": ("STRING",{"default":"180,0,90,270,0,0"}),
+                "elevations": ("STRING",{"default":"0,0,0,0,90,-90"}),
+            },
+        }
+    
+    RETURN_TYPES = ("IMAGE","FLOAT", "STRING", "STRING",)
+    RETURN_NAMES = ("images","ortho_scale", "azimuths", "elevations",)
+    FUNCTION = "process"
+    CATEGORY = "Trellis2Wrapper"
+    OUTPUT_NODE = True
+    
+    def render_view_nvdiffrast(self, mesh, elev, azim, resolution, scale):
+        verts = torch.from_numpy(mesh.vertices).float().cuda()
+        faces = torch.from_numpy(mesh.faces).int().cuda()
+        uvs   = torch.from_numpy(mesh.visual.uv).float().cuda()
+        
+        baseColorTexture = getBaseColorTexture(mesh)
+        tex = torch.from_numpy(np.array(baseColorTexture)).float().cuda() / 255.0
+
+        R, T = build_camera_RT(azim, elev, dist=scale, device=verts.device)
+        verts_cam = verts @ R.T + T
+        
+        verts_h = torch.cat([verts_cam, torch.ones_like(verts_cam[:, :1])], dim=1)
+        
+        P = ortho_projection(scale, verts.device)
+        verts_clip = (P @ verts_h.T).T
+
+        verts_clip = verts_clip.unsqueeze(0).contiguous()
+        faces = faces.contiguous()
+
+        glctx = dr.RasterizeGLContext()
+        rast, _ = dr.rasterize(
+            glctx,
+            verts_clip,
+            faces,
+            resolution=[resolution, resolution] 
+        )
+
+        uv_attr = dr.interpolate(uvs.unsqueeze(0), rast, faces)[0]
+        u = uv_attr[..., 0]
+        v = uv_attr[..., 1]
+        grid_x = u * 2 - 1
+        grid_y = (1.0 - v) * 2 - 1 # vertical flip
+        uv_grid = torch.stack([grid_x, grid_y], dim=-1)
+
+        tex_img = tex.permute(2,0,1).unsqueeze(0)
+        color = torch.nn.functional.grid_sample(
+            tex_img,
+            uv_grid,
+            align_corners=True
+        )[0]
+        
+        return color.permute(1,2,0), rast
+    
+    def render(
+        self,
+        elev, azim,
+        resolution=None,
+        tex=None,
+        keep_alpha=True,
+        bgcolor=None,
+        return_type='th',
+        scale=1.0,
+        mesh=None,
+    ):        
+        if tex is not None:
+            if isinstance(tex, Image.Image):
+                tex = torch.tensor(np.array(tex) / 255.0)
+            elif isinstance(tex, np.ndarray):
+                tex = torch.tensor(tex)
+            if tex.dim() == 2:
+                tex = tex.unsqueeze(-1)
+            tex = tex.float().to(self.device)
+        
+        image, rast = self.render_view_nvdiffrast(mesh, elev, azim, resolution, scale)
+        
+        rast = rast[0]
+        mask = (rast[:, :, 3:4] > 0).float() 
+
+        if bgcolor is None:
+            bgcolor = [0 for _ in range(image.shape[-1] - 1)]
+        image = image * mask + (1 - mask) * torch.tensor(bgcolor + [0], device=image.device)
+        if keep_alpha == False:
+            image = image[..., :-1]
+
+        if return_type == 'np':
+            image = image.cpu().numpy()
+        elif return_type == 'pl':
+            image = image.squeeze(-1).cpu().numpy() * 255
+            image = Image.fromarray(image.astype(np.uint8))
+        
+        return image.cpu()
+    
+    def render_textured_multiview(self, camera_elevs, camera_azims, ortho_scale, resolution, mesh):      
+        textured_maps = []
+        for elev, azim in zip(camera_elevs, camera_azims):
+            textured_map = self.render(
+                elev, azim, 
+                return_type='th', 
+                scale=ortho_scale, 
+                resolution=resolution,
+                mesh=mesh)
+            textured_maps.append(textured_map)
+        
+        return textured_maps
+    
+    def process(
+        self,
+        trimesh,
+        render_size,
+        ortho_scale,
+        azimuths,
+        elevations
+    ):
+        reset_cuda()
+        
+        if not hasattr(trimesh.visual, 'material'):
+            raise Exception("Trimesh does not have a material")
+                    
+        custom_az_list = Trellis2RenderMultiView()._parse_angles(azimuths)
+        custom_el_list = Trellis2RenderMultiView()._parse_angles(elevations)
+              
+        if custom_az_list and custom_el_list:
+            if len(custom_az_list) != len(custom_el_list):
+                raise Exception("azimuths and elevations must have the same amount of values")
+                
+            textured_maps = self.render_textured_multiview(custom_el_list, custom_az_list, 
+                ortho_scale, render_size, trimesh)
+            custom_images = torch.stack(textured_maps, dim=0)
+                        
+            return (custom_images, ortho_scale, azimuths, elevations,)
+        else:
+            raise Exception("azimuths and elevations are required") 
+
 class Trellis2CudaReset:
     @classmethod
     def INPUT_TYPES(s):
@@ -5561,6 +5771,7 @@ NODE_CLASS_MAPPINGS = {
     "Trellis2CudaReset": Trellis2CudaReset,
     "Trellis2ProjectHighPolyToLowPoly": Trellis2ProjectHighPolyToLowPoly,
     "Trellis2RenderMultiView": Trellis2RenderMultiView,
+    "Trellis2RenderMultiViewNvdiffrast": Trellis2RenderMultiViewNvdiffrast,
     "Trellis2SaveImage": Trellis2SaveImage,
     "Trellis2VoxelToMesh": Trellis2VoxelToMesh,
     "Trellis2UnloadAllModels": Trellis2UnloadAllModels,
@@ -5622,6 +5833,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Trellis2CudaReset": "Trellis2 - Cuda Reset",
     "Trellis2ProjectHighPolyToLowPoly": "Trellis2 - Projection HighPoly To LowPoly",
     "Trellis2RenderMultiView": "Trellis2 - Render MultiView",
+    "Trellis2RenderMultiViewNvdiffrast": "Trellis2 - Render MultiView (Nvdiffrast)",
     "Trellis2SaveImage": "Trellis2 - Save Image",
     "Trellis2VoxelToMesh": "Trellis2 - Voxel to Mesh",
     "Trellis2UnloadAllModels": "Trellis2 - Unload All ComfyUI Models",
