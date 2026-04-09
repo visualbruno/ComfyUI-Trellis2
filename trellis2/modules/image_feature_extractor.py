@@ -83,7 +83,9 @@ class DinoV3FeatureExtractor:
         hidden_states = self.model.embeddings(image, bool_masked_pos=None)
         position_embeddings = self.model.rope_embeddings(image)
 
-        for i, layer_module in enumerate(self.model.layer):
+        inner = getattr(self.model, 'model', self.model)
+        layers = inner.layer
+        for i, layer_module in enumerate(layers):
             hidden_states = layer_module(
                 hidden_states,
                 position_embeddings=position_embeddings,
