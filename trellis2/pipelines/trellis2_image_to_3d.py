@@ -23,6 +23,9 @@ import flex_gemm
 from flex_gemm.ops.grid_sample import grid_sample_3d
 
 import random
+import logging
+
+logger = logging.getLogger(__name__)
 
 from comfy.utils import ProgressBar
 
@@ -206,7 +209,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         
     def load_sparse_structure_model(self):        
         if self.models['sparse_structure_flow_model'] is None:
-            print('Loading Sparse Structure model ...')
+            logger.info('Loading Sparse Structure model ...')
             self.models['sparse_structure_flow_model'] = models.from_pretrained(f"{self.path}/{self._pretrained_args['models']['sparse_structure_flow_model']}")
             self.models['sparse_structure_flow_model'].eval()
             self.models['sparse_structure_flow_model'].to(self._device)
@@ -270,7 +273,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             
     def load_image_cond_model(self):
         if self.image_cond_model is None:
-            print('Loading Image Cond model ...')
+            logger.info('Loading Image Cond model ...')
             self.image_cond_model = getattr(image_feature_extractor, self._pretrained_args['image_cond_model']['name'])(**self._pretrained_args['image_cond_model']['args'])
             self.image_cond_model.to(self._device)
             
@@ -282,7 +285,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             
     def load_shape_slat_flow_model_512(self):        
         if self.models['shape_slat_flow_model_512'] is None:
-            print('Loading Shape Slat Flow 512 model ...')
+            logger.info('Loading Shape Slat Flow 512 model ...')
             self.models['shape_slat_flow_model_512'] = models.from_pretrained(f"{self.path}/{self._pretrained_args['models']['shape_slat_flow_model_512']}")
             self.models['shape_slat_flow_model_512'].eval()
             self.models['shape_slat_flow_model_512'].to(self._device)
@@ -295,7 +298,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             
     def load_tex_slat_flow_model_512(self):        
         if self.models['tex_slat_flow_model_512'] is None:
-            print('Loading Texture Slat Flow 512 model ...')
+            logger.info('Loading Texture Slat Flow 512 model ...')
             self.models['tex_slat_flow_model_512'] = models.from_pretrained(f"{self.path}/{self._pretrained_args['models']['tex_slat_flow_model_512']}")
             self.models['tex_slat_flow_model_512'].eval()
             self.models['tex_slat_flow_model_512'].to(self._device)          
@@ -308,7 +311,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
 
     def load_tex_slat_decoder(self):        
         if self.models['tex_slat_decoder'] is None:
-            print('Loading Texture Slat decoder model ...')
+            logger.info('Loading Texture Slat decoder model ...')
             self.models['tex_slat_decoder'] = models.from_pretrained(f"{self.path}/{self._pretrained_args['models']['tex_slat_decoder']}")
             self.models['tex_slat_decoder'].eval()
             self.models['tex_slat_decoder'].to(self._device)
@@ -323,7 +326,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             
     def load_shape_slat_decoder(self):        
         if self.models['shape_slat_decoder'] is None:
-            print('Loading Shape Slat decoder model ...')
+            logger.info('Loading Shape Slat decoder model ...')
             self.models['shape_slat_decoder'] = models.from_pretrained(f"{self.path}/{self._pretrained_args['models']['shape_slat_decoder']}")
             self.models['shape_slat_decoder'].eval()
             self.models['shape_slat_decoder'].to(self._device)
@@ -338,7 +341,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
 
     def load_shape_slat_flow_model_1024(self):        
         if self.models['shape_slat_flow_model_1024'] is None:
-            print('Loading Shape Slat Flow 1024 model ...')
+            logger.info('Loading Shape Slat Flow 1024 model ...')
             self.models['shape_slat_flow_model_1024'] = models.from_pretrained(f"{self.path}/{self._pretrained_args['models']['shape_slat_flow_model_1024']}")
             self.models['shape_slat_flow_model_1024'].eval()
             self.models['shape_slat_flow_model_1024'].to(self._device)           
@@ -351,7 +354,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
 
     def load_tex_slat_flow_model_1024(self):        
         if self.models['tex_slat_flow_model_1024'] is None:
-            print('Loading Texture Slat Flow 1024 model ...')
+            logger.info('Loading Texture Slat Flow 1024 model ...')
             self.models['tex_slat_flow_model_1024'] = models.from_pretrained(f"{self.path}/{self._pretrained_args['models']['tex_slat_flow_model_1024']}")
             self.models['tex_slat_flow_model_1024'].eval()
             self.models['tex_slat_flow_model_1024'].to(self._device)                   
@@ -364,7 +367,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
 
     def load_shape_slat_encoder(self):        
         if self.models['shape_slat_encoder'] is None:
-            print('Loading Shape Slat Encoder model ...')
+            logger.info('Loading Shape Slat Encoder model ...')
             if getattr(self, 'use_fp8', False):
                 self.models['shape_slat_encoder'] = models.from_pretrained(f"{self.path}/ckpts_fp8/shape_enc_next_dc_f16c32_fp8") 
             else:
@@ -842,16 +845,16 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             num_tokens = coords.shape[0]
             if num_tokens < max_num_tokens:
                 if hr_resolution != resolution:
-                    print(f"Due to the limited number of tokens, the resolution is reduced to {hr_resolution}.")
-                print(f"Num Tokens: {num_tokens}")
+                    logger.info(f"Due to the limited number of tokens, the resolution is reduced to {hr_resolution}.")
+                logger.info(f"Num Tokens: {num_tokens}")
                 break
             hr_resolution -= 128
             if hr_resolution < 1024 and resolution >= 1024:
-                print(f"Num Tokens: {num_tokens}")
+                logger.info(f"Num Tokens: {num_tokens}")
                 hr_resolution = 1024
                 break
             if hr_resolution < 512:
-                print(f"Num Tokens: {num_tokens}")
+                logger.info(f"Num Tokens: {num_tokens}")
                 hr_resolution = 512
                 break
         
@@ -1543,16 +1546,16 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             num_tokens = coords.shape[0]
             if num_tokens < max_num_tokens:
                 if hr_resolution != resolution:
-                    print(f"Due to the limited number of tokens, the resolution is reduced to {hr_resolution}.")
-                print(f"Num Tokens: {num_tokens}")
+                    logger.info(f"Due to the limited number of tokens, the resolution is reduced to {hr_resolution}.")
+                logger.info(f"Num Tokens: {num_tokens}")
                 break
             hr_resolution -= 128
             if hr_resolution < 1024 and resolution >= 1024:
-                print(f"Num Tokens: {num_tokens}")
+                logger.info(f"Num Tokens: {num_tokens}")
                 hr_resolution = 1024
                 break
             if hr_resolution < 512:
-                print(f"Num Tokens: {num_tokens}")
+                logger.info(f"Num Tokens: {num_tokens}")
                 hr_resolution = 512
                 break
         
@@ -2453,7 +2456,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             num_tokens = coords.shape[0]
             if num_tokens < max_num_tokens:
                 if hr_resolution != resolution:
-                    print(f"Due to the limited number of tokens, the resolution is reduced to {hr_resolution}.")
+                    logger.info(f"Due to the limited number of tokens, the resolution is reduced to {hr_resolution}.")
                 break
             hr_resolution -= 128
             if hr_resolution < 1024 and resolution >= 1024:
@@ -2636,7 +2639,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         Returns:
             SparseTensor: The encoded structured latent.
         """
-        print('Converting mesh to flexible dual grid ...')
+        logger.info('Converting mesh to flexible dual grid ...')
         vertices = torch.from_numpy(mesh.vertices).float()
         faces = torch.from_numpy(mesh.faces).long()
         
@@ -2695,7 +2698,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         else:
             _cumesh = cumesh.CuMesh()
             _cumesh.init(vertices_torch, faces_torch)
-            print('Unwrapping mesh ...')
+            logger.info('Unwrapping mesh ...')
             vertices_torch, faces_torch, uvs_torch, vmap = _cumesh.uv_unwrap(
                 compute_charts_kwargs={
                     "threshold_cone_half_angle_rad": np.radians(mesh_cluster_threshold_cone_half_angle_rad),
@@ -2748,7 +2751,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                     grid_size = torch.tensor(grid_size, dtype=torch.int32, device=pbr_voxel.coords.device)
                 voxel_size = (aabb[1] - aabb[0]) / grid_size
             
-            print('Baking colors on vertices...')
+            logger.info('Baking colors on vertices...')
             out_vertices = vertices_torch
             out_faces = faces_torch
             out_normals = normals           
@@ -2789,7 +2792,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             # Combine into RGBA
             vertex_colors_rgba = np.concatenate([vertex_colors_rgb, vertex_alpha], axis=-1)
             
-            print("Finalizing mesh with vertex colors...")
+            logger.info("Finalizing mesh with vertex colors...")
             
             vertices_np = out_vertices.cpu().numpy()
             faces_np = out_faces.cpu().numpy()
@@ -2821,7 +2824,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             return (textured_mesh, placeholder_texture, placeholder_texture,)
                 
         # rasterize
-        print('Finalizing mesh ...')
+        logger.info('Finalizing mesh ...')
         ctx = dr.RasterizeCudaContext()
         uvs_torch = torch.cat([uvs_torch * 2 - 1, torch.zeros_like(uvs_torch[:, :1]), torch.ones_like(uvs_torch[:, :1])], dim=-1).unsqueeze(0)
         rast, _ = dr.rasterize(
@@ -3137,7 +3140,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
     ) -> SparseTensor:
         # Upsample       
         self.load_shape_slat_decoder()
-        print('Decoding mesh slat ...')
+        logger.info('Decoding mesh slat ...')
         if self.low_vram:
             self.models['shape_slat_decoder'].to(self.device)
             self.models['shape_slat_decoder'].low_vram = True
@@ -3168,7 +3171,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             num_tokens = coords.shape[0]
             if num_tokens < max_num_tokens:
                 if hr_resolution != resolution:
-                    print(f"Due to the limited number of tokens, the resolution is reduced to {hr_resolution}.")
+                    logger.info(f"Due to the limited number of tokens, the resolution is reduced to {hr_resolution}.")
                 break
             hr_resolution -= 128
             if hr_resolution < 1024 and resolution >= 1024:
