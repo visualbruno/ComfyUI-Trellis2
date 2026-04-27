@@ -3214,8 +3214,106 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             cond = self._cond_cpu(cond)
             self._cleanup_cuda()
 
-        return slat, hr_resolution        
-    
+        return slat, hr_resolution
+
+    def sample_mesh_slat_multiview(
+        self,
+        mesh_slat,
+        conds: dict,
+        views: list,
+        flow_model,
+        resolution: int,
+        sampler_params: dict = {},
+        max_num_tokens: int = 49152,
+        downsampling: int = 16,
+        front_axis: str = 'z',
+        blend_temperature: float = 2.0,
+    ) -> tuple:
+        # Upsample
+        self.load_shape_slat_decoder()
+        logger.info('Decoding mesh slat (MultiView) ...')
+        if self.low_vram:
+            self.models['shape_slat_decoder'].to(self.device)
+            self.models['shape_slat_decoder'].low_vram = True
+        hr_coords = self.models['shape_slat_decoder'].upsample(mesh_slat, upsample_times=4)
+        if self.low_vram:
+            self.models['shape_slat_decoder'].cpu()
+            self.models['shape_slat_decoder'].low_vram = False
+        hr_resolution = resolution
+
+        if not self.keep_models_loaded:
+            self.unload_shape_slat_decoder()
+
+        lr_resolution = resolution
+
+        while True:
+            quant_coords = torch.cat([
+                hr_coords[:, :1],
+                ((hr_coords[:, 1:] + 0.5) / lr_resolution * (hr_resolution // downsampling)).int(),
+            ], dim=1)
+            coords = quant_coords.unique(dim=0)
+            num_tokens = coords.shape[0]
+            if num_tokens < max_num_tokens:
+                if hr_resolution != resolution:
+                    logger.info(f"Due to the limited number of tokens, the resolution is reduced to {hr_resolution}.")
+                break
+            hr_resolution -= 128
+            if hr_resolution < 1024 and resolution >= 1024:
+                hr_resolution = 1024
+                break
+            if hr_resolution < 512:
+                hr_resolution = 512
+                break
+
+        if self.low_vram:
+            for v in conds:
+                conds[v] = self._cond_to(conds[v], self.device)
+
+        coords_dev = coords.to(self.device)
+        noise = SparseTensor(
+            feats=torch.randn(coords.shape[0], flow_model.in_channels, device=self.device),
+            coords=coords_dev,
+        )
+
+        sampler_params = {**self.shape_slat_sampler_params, **sampler_params}
+
+        sampler_class = getattr(samplers, f"Flow{self._sampler_prefix}MultiViewGuidanceIntervalSampler", samplers.FlowEulerMultiViewGuidanceIntervalSampler)
+        sampler = sampler_class(
+            sigma_min=1e-5,
+            resolution=flow_model.resolution if hasattr(flow_model, 'resolution') else flow_model[0].resolution
+        )
+
+        if self.low_vram:
+            flow_model.to(self.device)
+
+        slat = sampler.sample(
+            flow_model,
+            noise,
+            conds=conds,
+            views=views,
+            front_axis=front_axis,
+            blend_temperature=blend_temperature,
+            **sampler_params,
+            verbose=True,
+            tqdm_desc="Sampling mesh shape SLat (MultiView)",
+        ).samples
+
+        if self.low_vram:
+            flow_model.cpu()
+            self._cleanup_cuda()
+
+        std = torch.tensor(self.shape_slat_normalization['std'])[None].to(slat.device)
+        mean = torch.tensor(self.shape_slat_normalization['mean'])[None].to(slat.device)
+        slat = slat * std + mean
+
+        del coords_dev
+        if self.low_vram:
+            for v in conds:
+                conds[v] = self._cond_cpu(conds[v])
+            self._cleanup_cuda()
+
+        return slat, hr_resolution
+
     @torch.no_grad()
     def refine_mesh(
         self,
@@ -3375,4 +3473,153 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             else:
                 return out_mesh, (shape_slat, None, res)
         else:
-            return out_mesh      
+            return out_mesh
+
+    @torch.no_grad()
+    def refine_mesh_multiview(
+        self,
+        mesh: trimesh.Trimesh,
+        front: Image.Image,
+        back: Image.Image = None,
+        left: Image.Image = None,
+        right: Image.Image = None,
+        seed: int = 42,
+        shape_slat_sampler_params: dict = {},
+        tex_slat_sampler_params: dict = {},
+        resolution: int = 1024,
+        max_num_tokens: int = 50000,
+        generate_texture_slat: bool = True,
+        return_latent: bool = False,
+        downsampling: int = 16,
+        use_tiled: bool = True,
+        front_axis: str = 'z',
+        blend_temperature: float = 2.0,
+        sampler: str = 'euler',
+    ):
+        self.switch_samplers(sampler)
+
+        mesh = self.preprocess_mesh(mesh)
+        seed_all(seed)
+
+        # Build views dict
+        views_dict = {'front': front}
+        if back is not None:
+            views_dict['back'] = back
+        if left is not None:
+            views_dict['left'] = left
+        if right is not None:
+            views_dict['right'] = right
+        views_list = list(views_dict.keys())
+
+        # Build per-view conditioning
+        self.load_image_cond_model()
+        conds = {}
+        cond_resolution = 512 if resolution == 512 else 1024
+        for v, img in views_dict.items():
+            conds[v] = self.get_cond([img], cond_resolution)
+        if not self.keep_models_loaded:
+            self.unload_image_cond_model()
+
+        mesh_slat = self.encode_shape_slat(mesh, resolution)
+
+        if resolution == 512:
+            self.unload_shape_slat_flow_model_1024()
+            self.load_shape_slat_flow_model_512()
+            shape_slat, res = self.sample_mesh_slat_multiview(
+                mesh_slat, conds, views_list,
+                self.models['shape_slat_flow_model_512'],
+                512, shape_slat_sampler_params,
+                max_num_tokens, downsampling,
+                front_axis, blend_temperature
+            )
+
+            if not self.keep_models_loaded:
+                self.unload_shape_slat_flow_model_512()
+
+            if generate_texture_slat:
+                self.unload_tex_slat_flow_model_1024()
+                self.load_tex_slat_flow_model_512()
+                tex_slat = self.sample_tex_slat_multiview(
+                    conds, views_list,
+                    shape_slat=shape_slat,
+                    flow_model=self.models['tex_slat_flow_model_512'],
+                    sampler_params=tex_slat_sampler_params,
+                    front_axis=front_axis,
+                    blend_temperature=blend_temperature,
+                )
+
+            if not self.keep_models_loaded:
+                self.unload_tex_slat_flow_model_512()
+        elif resolution == 1024:
+            self.unload_shape_slat_flow_model_512()
+            self.load_shape_slat_flow_model_1024()
+            shape_slat, res = self.sample_mesh_slat_multiview(
+                mesh_slat, conds, views_list,
+                self.models['shape_slat_flow_model_1024'],
+                1024, shape_slat_sampler_params,
+                max_num_tokens, downsampling,
+                front_axis, blend_temperature
+            )
+
+            if not self.keep_models_loaded:
+                self.unload_shape_slat_flow_model_1024()
+
+            if generate_texture_slat:
+                self.unload_tex_slat_flow_model_512()
+                self.load_tex_slat_flow_model_1024()
+                tex_slat = self.sample_tex_slat_multiview(
+                    conds, views_list,
+                    shape_slat=shape_slat,
+                    flow_model=self.models['tex_slat_flow_model_1024'],
+                    sampler_params=tex_slat_sampler_params,
+                    front_axis=front_axis,
+                    blend_temperature=blend_temperature,
+                )
+
+            if not self.keep_models_loaded:
+                self.unload_tex_slat_flow_model_1024()
+        elif resolution == 1536:
+            self.unload_shape_slat_flow_model_512()
+            self.load_shape_slat_flow_model_1024()
+            shape_slat, res = self.sample_mesh_slat_multiview(
+                mesh_slat, conds, views_list,
+                self.models['shape_slat_flow_model_1024'],
+                1536, shape_slat_sampler_params,
+                max_num_tokens, downsampling,
+                front_axis, blend_temperature
+            )
+
+            if not self.keep_models_loaded:
+                self.unload_shape_slat_flow_model_1024()
+
+            if generate_texture_slat:
+                self.unload_tex_slat_flow_model_512()
+                self.load_tex_slat_flow_model_1024()
+                tex_slat = self.sample_tex_slat_multiview(
+                    conds, views_list,
+                    shape_slat=shape_slat,
+                    flow_model=self.models['tex_slat_flow_model_1024'],
+                    sampler_params=tex_slat_sampler_params,
+                    front_axis=front_axis,
+                    blend_temperature=blend_temperature,
+                )
+
+            if not self.keep_models_loaded:
+                self.unload_tex_slat_flow_model_1024()
+
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        if generate_texture_slat:
+            out_mesh = self.decode_latent(shape_slat, tex_slat, res, use_tiled=use_tiled)
+        else:
+            out_mesh = self.decode_latent(shape_slat, None, res, use_tiled=use_tiled)
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+
+        if return_latent:
+            if generate_texture_slat:
+                return out_mesh, (shape_slat, tex_slat, res)
+            else:
+                return out_mesh, (shape_slat, None, res)
+        else:
+            return out_mesh

@@ -1,4 +1,5 @@
 import os
+import logging
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -2700,7 +2701,122 @@ class Trellis2MeshRefiner:
             print('Not building BVH, only used for texturing')
             bvh = None
         
-        return (mesh, bvh,)        
+        return (mesh, bvh,)
+
+
+class Trellis2MeshRefinerMultiView:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "pipeline": ("TRELLIS2PIPELINE",),
+                "trimesh": ("TRIMESH",),
+                "front_image": ("IMAGE",),
+                "seed": ("INT", {"default": 12345, "min": 0, "max": 0x7fffffff}),
+                "resolution": ([512, 1024, 1536], {"default": 1024}),
+                "shape_steps": ("INT", {"default": 12, "min": 1, "max": 100}),
+                "shape_guidance_strength": ("FLOAT", {"default": 6.50, "min": 0.00, "max": 99.99, "step": 0.01}),
+                "shape_guidance_rescale": ("FLOAT", {"default": 0.05, "min": 0.00, "max": 1.00, "step": 0.01}),
+                "shape_rescale_t": ("FLOAT", {"default": 4.00, "min": 0.00, "max": 9.99, "step": 0.01}),
+                "texture_steps": ("INT", {"default": 12, "min": 1, "max": 100}),
+                "texture_guidance_strength": ("FLOAT", {"default": 3.00, "min": 0.00, "max": 99.99, "step": 0.01}),
+                "texture_guidance_rescale": ("FLOAT", {"default": 0.20, "min": 0.00, "max": 1.00, "step": 0.01}),
+                "texture_rescale_t": ("FLOAT", {"default": 3.00, "min": 0.00, "max": 9.99, "step": 0.01}),
+                "max_num_tokens": ("INT", {"default": 999999, "min": 0, "max": 999999}),
+                "generate_texture_slat": ("BOOLEAN", {"default": True}),
+                "downsampling": ([16, 32, 64], {"default": 16}),
+                "shape_guidance_interval_start": ("FLOAT", {"default": 0.10, "min": 0.00, "max": 1.00, "step": 0.01}),
+                "shape_guidance_interval_end": ("FLOAT", {"default": 1.00, "min": 0.00, "max": 1.00, "step": 0.01}),
+                "texture_guidance_interval_start": ("FLOAT", {"default": 0.00, "min": 0.00, "max": 1.00, "step": 0.01}),
+                "texture_guidance_interval_end": ("FLOAT", {"default": 0.90, "min": 0.00, "max": 1.00, "step": 0.01}),
+                "use_tiled_decoder": ("BOOLEAN", {"default": True}),
+                "front_axis": (["z", "x"], {"default": "z"}),
+                "blend_temperature": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 10.0, "step": 0.1}),
+                "sampler": (["euler", "heun", "rk4", "rk5"], {"default": "euler"}),
+            },
+            "optional": {
+                "back_image": ("IMAGE",),
+                "left_image": ("IMAGE",),
+                "right_image": ("IMAGE",),
+            },
+        }
+
+    RETURN_TYPES = ("MESHWITHVOXEL", "BVH",)
+    RETURN_NAMES = ("mesh", "bvh",)
+    FUNCTION = "process"
+    CATEGORY = "Trellis2Wrapper"
+    OUTPUT_NODE = True
+
+    def process(self, pipeline, trimesh, front_image, seed, resolution,
+        shape_steps,
+        shape_guidance_strength,
+        shape_guidance_rescale,
+        shape_rescale_t,
+        texture_steps,
+        texture_guidance_strength,
+        texture_guidance_rescale,
+        texture_rescale_t,
+        max_num_tokens,
+        generate_texture_slat,
+        downsampling,
+        shape_guidance_interval_start,
+        shape_guidance_interval_end,
+        texture_guidance_interval_start,
+        texture_guidance_interval_end,
+        use_tiled_decoder,
+        front_axis,
+        blend_temperature,
+        sampler,
+        back_image=None,
+        left_image=None,
+        right_image=None):
+
+        reset_cuda()
+
+        front_pil = tensor2pil(front_image)
+        back_pil = tensor2pil(back_image) if back_image is not None else None
+        left_pil = tensor2pil(left_image) if left_image is not None else None
+        right_pil = tensor2pil(right_image) if right_image is not None else None
+
+        shape_guidance_interval = [shape_guidance_interval_start, shape_guidance_interval_end]
+        texture_guidance_interval = [texture_guidance_interval_start, texture_guidance_interval_end]
+
+        shape_slat_sampler_params = {"steps": shape_steps, "guidance_strength": shape_guidance_strength, "guidance_rescale": shape_guidance_rescale, "guidance_interval": shape_guidance_interval, "rescale_t": shape_rescale_t}
+        tex_slat_sampler_params = {"steps": texture_steps, "guidance_strength": texture_guidance_strength, "guidance_rescale": texture_guidance_rescale, "guidance_interval": texture_guidance_interval, "rescale_t": texture_rescale_t}
+
+        mesh = pipeline.refine_mesh_multiview(
+            mesh=trimesh,
+            front=front_pil,
+            back=back_pil,
+            left=left_pil,
+            right=right_pil,
+            seed=seed,
+            shape_slat_sampler_params=shape_slat_sampler_params,
+            tex_slat_sampler_params=tex_slat_sampler_params,
+            resolution=resolution,
+            max_num_tokens=max_num_tokens,
+            generate_texture_slat=generate_texture_slat,
+            downsampling=downsampling,
+            use_tiled=use_tiled_decoder,
+            front_axis=front_axis,
+            blend_temperature=blend_temperature,
+            sampler=sampler,
+        )[0]
+
+        vertices = mesh.vertices.cuda()
+        faces = mesh.faces.cuda()
+
+        if generate_texture_slat:
+            logging.info("Building BVH for current mesh...")
+            bvh = CuMesh.cuBVH(vertices.detach().clone(), faces.detach().clone())
+            bvh.vertices = vertices.detach().clone()
+            bvh.faces = faces.detach().clone()
+        else:
+            logging.info('Not building BVH, only used for texturing')
+            bvh = None
+
+        return (mesh, bvh,)
+
 
 class Trellis2PostProcess2:
     @classmethod
@@ -6437,6 +6553,7 @@ NODE_CLASS_MAPPINGS = {
     "Trellis2LoadMesh": Trellis2LoadMesh,
     "Trellis2PreProcessImage": Trellis2PreProcessImage,
     "Trellis2MeshRefiner": Trellis2MeshRefiner,
+    "Trellis2MeshRefinerMultiView": Trellis2MeshRefinerMultiView,
     "Trellis2PostProcess2": Trellis2PostProcess2,
     "Trellis2OvoxelExportToGLB": Trellis2OvoxelExportToGLB,
     "Trellis2TrimeshToMeshWithVoxel": Trellis2TrimeshToMeshWithVoxel,
@@ -6505,6 +6622,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Trellis2LoadMesh": "Trellis2 - Load Mesh",
     "Trellis2PreProcessImage": "Trellis2 - PreProcess Image",
     "Trellis2MeshRefiner": "Trellis2 - Mesh Refiner",
+    "Trellis2MeshRefinerMultiView": "Trellis2 - Mesh Refiner Multi-View",
     "Trellis2PostProcess2": "Trellis2 - PostProcess Mesh (using Trimesh)",
     "Trellis2OvoxelExportToGLB": "Trellis2 - Ovoxel Export to GLB",
     "Trellis2TrimeshToMeshWithVoxel": "Trellis2 - Trimesh to Mesh with Voxel",
