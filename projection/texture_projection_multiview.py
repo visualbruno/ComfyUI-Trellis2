@@ -143,7 +143,8 @@ def texture_mesh_with_multiview(
     max_hole_size: int = 10,
     use_metallic: bool = True,
     depth_eps: float = 0.002,
-    low_poly_mesh: trimesh.Trimesh = None
+    low_poly_mesh: trimesh.Trimesh = None,
+    add_alpha_channel: bool = False
 ):
     if not (len(images) == len(azimuths) == len(elevations)):
         raise ValueError("images, azimuths, and elevations must have the same length")
@@ -283,7 +284,7 @@ def texture_mesh_with_multiview(
 
         # Dilate the foreground mask and inpaint the background band
         # Scale dilation with image resolution to prevent bilinear bleed
-        base_res = 1024
+        base_res = 2048
         scale = max(img_h, img_w) / base_res
         dilate_px = int(max(5, 5 * scale))
         kernel = np.ones((3, 3), np.uint8)
@@ -321,7 +322,7 @@ def texture_mesh_with_multiview(
         cam_depth = cam_depth.permute(2,0,1).unsqueeze(0)  # for grid_sample
         inf_depth = torch.full_like(cam_depth, torch.finfo(cam_depth.dtype).max)
         cam_depth_occ = torch.where(cam_hit.unsqueeze(0).unsqueeze(0), cam_depth, inf_depth)
-        cam_depth_occ = -F.max_pool2d(-cam_depth_occ, kernel_size=3, stride=1, padding=1)
+        cam_depth_occ = -F.max_pool2d(-cam_depth_occ, kernel_size=1, stride=1, padding=0)
 
         # Map texels to camera clip space
         _, _, u_clip, v_clip = project_texels_to_image(tex_pos, right, up, ortho_scale)
@@ -363,10 +364,10 @@ def texture_mesh_with_multiview(
         sampled_hit = F.grid_sample(
             cam_hit_img,
             grid_occ,
-            mode='bilinear',
+            mode='nearest',
             padding_mode='zeros',
             align_corners=False
-        )[0, 0] > 0.25
+        )[0, 0] > 0.10
         
         sampled_depth = F.grid_sample(
             cam_depth_occ,
@@ -460,16 +461,37 @@ def texture_mesh_with_multiview(
         # color fully. Where it didn't, keep the original texture untouched.
         # The normal-based weighting already handles per-view confidence during
         # accumulation, so no additional blending factor is needed here.
-        blended_rgb = (
-            projected_color * confidence3 +
-            existing_rgb * (1.0 - confidence3)
-        )
+        # blended_rgb = (
+            # projected_color * confidence3 +
+            # existing_rgb * (1.0 - confidence3)
+        # )
+        
+        # Hard composite: use projected colour only where:
+        #   - the texel lies inside a UV island (uv_hit_mask)
+        #   - the accumulated projection weight is above a tiny fraction of the max weight
+        conf_threshold = 0.1
+        hard_mask = uv_hit_mask & (confidence > conf_threshold)
 
-        composite_mask = confidence > 0.01
+        # Keep original texture wherever the mask is False
+        blended_rgb = torch.where(hard_mask.unsqueeze(-1), projected_color, existing_rgb)
+
+        composite_mask = hard_mask  # for the reporting print below        
+
+        #composite_mask = confidence > 0.01
 
         color_np = (blended_rgb.cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
-        # Preserve the original alpha everywhere (mesh already has full coverage)
-        alpha_np = (existing_alpha.squeeze(-1).cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
+        
+        # Alpha from projection confidence
+        conf_np = confidence.cpu().numpy()        
+        
+        if add_alpha_channel:
+            uv_mask_np = uv_hit_mask.cpu().numpy()
+            alpha_np = np.zeros((texture_size, texture_size), dtype=np.uint8)
+            alpha_np[uv_mask_np] = (conf_np[uv_mask_np] * 255).clip(0, 255).astype(np.uint8)
+            alpha_np[conf_np <= 0.01] = 0
+        else:            
+            # Preserve the original alpha everywhere (mesh already has full coverage)
+            alpha_np = (existing_alpha.squeeze(-1).cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
 
         n_projected = int(composite_mask.sum().item())
         print(f"  Projected texels: {n_projected} / {texture_size*texture_size}"
@@ -488,11 +510,20 @@ def texture_mesh_with_multiview(
         # Alpha from projection confidence
         conf_np = confidence.cpu().numpy()
 
-        # Slight threshold to remove noise
-        alpha_mask = conf_np > 0.01
+        if add_alpha_channel:
+            # Use UV mask for proper transparent background
+            uv_mask_np = uv_hit_mask.cpu().numpy()
 
-        alpha_np = (conf_np * 255).clip(0, 255).astype(np.uint8)
-        alpha_np[~alpha_mask] = 0
+            alpha_np = np.zeros((texture_size, texture_size), dtype=np.uint8)
+
+            alpha_np[uv_mask_np] = (conf_np[uv_mask_np] * 255).clip(0, 255).astype(np.uint8)
+            alpha_np[conf_np <= 0.01] = 0
+        else:
+            # Slight threshold to remove noise
+            alpha_mask = conf_np > 0.01
+
+            alpha_np = (conf_np * 255).clip(0, 255).astype(np.uint8)
+            alpha_np[~alpha_mask] = 0
 
     if fill_holes:
         print('Filling holes and padding UV seams ...')

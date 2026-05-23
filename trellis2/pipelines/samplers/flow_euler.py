@@ -76,7 +76,7 @@ class DinoLockMixin:
 
     def _dino_lock_step(self, model, x_t, t, t_prev, cond,
                          lock_strength, step_idx, total_steps,
-                         substeps=1, v_ema=None, ema_alpha=0.8, verbose=True, **kwargs):
+                         substeps=1, v_ema=None, ema_alpha=0.85, verbose=True, **kwargs):
         """
         One step with DINO lock + velocity EMA smoothing.
 
@@ -164,7 +164,7 @@ class DinoLockMixin:
         tqdm_desc: str = "Sampling",
         dino_lock: float = 0.0,
         dino_substeps: int = 4,
-        dino_foundation_cap: float = 0.92,
+        dino_foundation_cap: float = 0.92,        
         **kwargs
     ):
         # Strip keys that must not reach the model
@@ -183,7 +183,10 @@ class DinoLockMixin:
                                   **kwargs)
 
         if dino_lock <= 0.0:
-            return super().sample(model, noise, cond, steps, rescale_t, verbose,
+            return super().sample(model, noise, cond, 
+                                  steps = steps, 
+                                  rescale_t = rescale_t, 
+                                  verbose = verbose,
                                   tqdm_desc=tqdm_desc,
                                   neg_cond=neg_cond,
                                   guidance_strength=guidance_strength,

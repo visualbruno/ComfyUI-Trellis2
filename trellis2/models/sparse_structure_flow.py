@@ -73,6 +73,9 @@ class SparseStructureFlowModel(nn.Module):
         initialization: str = 'vanilla',
         qk_rms_norm: bool = False,
         qk_rms_norm_cross: bool = False,
+        image_attn_mode: Literal["cross", "proj", "gated_proj"] = "cross",
+        proj_in_channels: Optional[int] = None,
+        vae_in_channels: Optional[int] = None,        
         **kwargs
     ):
         super().__init__()
@@ -90,6 +93,9 @@ class SparseStructureFlowModel(nn.Module):
         self.initialization = initialization
         self.qk_rms_norm = qk_rms_norm
         self.qk_rms_norm_cross = qk_rms_norm_cross
+        self.image_attn_mode = image_attn_mode
+        self.proj_in_channels = proj_in_channels
+        self.vae_in_channels = vae_in_channels        
         self.dtype = str_to_dtype(dtype)
 
         self.t_embedder = TimestepEmbedder(model_channels)
@@ -130,6 +136,9 @@ class SparseStructureFlowModel(nn.Module):
                 share_mod=share_mod,
                 qk_rms_norm=self.qk_rms_norm,
                 qk_rms_norm_cross=self.qk_rms_norm_cross,
+                image_attn_mode=image_attn_mode,
+                proj_in_channels=proj_in_channels,
+                vae_in_channels=vae_in_channels,                
             )
             for _ in range(num_blocks)
         ])
@@ -199,7 +208,11 @@ class SparseStructureFlowModel(nn.Module):
                         nn.init.constant_(module.bias, 0)
             for block in self.blocks:
                 block.self_attn.to_out.apply(_scaled_init)
-                block.cross_attn.to_out.apply(_scaled_init)
+                # Handle cross, proj, and gated_proj modes
+                if self.image_attn_mode in ("proj", "gated_proj"):
+                    block.cross_attn.cross_attn_block.to_out.apply(_scaled_init)
+                else:
+                    block.cross_attn.to_out.apply(_scaled_init)
                 block.mlp.mlp[2].apply(_scaled_init)
             
             # Initialize input layer to make the initial representation have variance 1
@@ -224,6 +237,19 @@ class SparseStructureFlowModel(nn.Module):
             nn.init.constant_(self.out_layer.bias, 0)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass.
+        
+        Args:
+            x: Input tensor [B, C, D, H, W]
+            t: Timestep tensor [B]
+            cond: Conditioning tensor. For "cross" mode: [B, N, D]. 
+                  For "proj" mode: dict {'global': global_cond, 'proj': proj_cond} 
+                  or tuple of (global_cond, proj_cond)
+        
+        Returns:
+            Output tensor [B, C, D, H, W]
+        """        
         assert [*x.shape] == [x.shape[0], self.in_channels, *[self.resolution] * 3], \
                 f"Input shape mismatch, got {x.shape}, expected {[x.shape[0], self.in_channels, *[self.resolution] * 3]}"
 
@@ -237,7 +263,28 @@ class SparseStructureFlowModel(nn.Module):
             t_emb = self.adaLN_modulation(t_emb)
         t_emb = manual_cast(t_emb, self.dtype)
         h = manual_cast(h, self.dtype)
-        cond = manual_cast(cond, self.dtype)
+        
+        # Handle different conditioning modes
+        if hasattr(self,'image_attn_mode'):            
+            if self.image_attn_mode == 'proj':
+                if isinstance(cond, dict):
+                    global_cond = cond['global']
+                    proj_cond = cond['proj']
+                else:
+                    global_cond, proj_cond = cond
+                global_cond = manual_cast(global_cond, self.dtype)
+                proj_cond = manual_cast(proj_cond, self.dtype)
+                cond = (global_cond, proj_cond)
+            elif self.image_attn_mode == 'gated_proj':
+                global_cond = manual_cast(cond['global'], self.dtype)
+                proj_semantic = manual_cast(cond['proj_semantic'], self.dtype)
+                proj_color = manual_cast(cond['proj_color'], self.dtype)
+                cond = {'global': global_cond, 'proj_semantic': proj_semantic, 'proj_color': proj_color}
+            else:
+                cond = manual_cast(cond, self.dtype)        
+        else:
+            cond = manual_cast(cond, self.dtype)
+            
         for block in self.blocks:
             h = block(h, t_emb, cond, self.rope_phases)
         h = manual_cast(h, x.dtype)

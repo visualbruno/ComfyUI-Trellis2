@@ -1,7 +1,7 @@
 [project]
 name = "trellis2"
 description = "ComfyUI Wrapper for Microsoft Trellis.2 - Native and Compact Structured Latents for 3D Generation"
-version = "1.0.22"
+version = "1.0.23"
 license = {file = "LICENSE"} 
 # classifiers = [
 #     # For OS-independent nodes (works on all operating systems)

@@ -1,7 +1,7 @@
 from typing import *
 import torch
 import torch.nn as nn
-from ..attention import MultiHeadAttention
+from ..attention import MultiHeadAttention, ProjectAttention, GatedProjectAttention
 from ..norm import LayerNorm32
 from .blocks import FeedForwardNet
 
@@ -96,6 +96,9 @@ class ModulatedTransformerCrossBlock(nn.Module):
         qk_rms_norm_cross: bool = False,
         qkv_bias: bool = True,
         share_mod: bool = False,
+        image_attn_mode: Literal["cross", "proj", "gated_proj"] = "cross",
+        proj_in_channels: Optional[int] = None,
+        vae_in_channels: Optional[int] = None,        
     ):
         super().__init__()
         self.use_checkpoint = use_checkpoint
@@ -115,15 +118,46 @@ class ModulatedTransformerCrossBlock(nn.Module):
             rope_freq=rope_freq,
             qk_rms_norm=qk_rms_norm,
         )
-        self.cross_attn = MultiHeadAttention(
-            channels,
-            ctx_channels=ctx_channels,
-            num_heads=num_heads,
-            type="cross",
-            attn_mode="full",
-            qkv_bias=qkv_bias,
-            qk_rms_norm=qk_rms_norm_cross,
-        )
+        
+        # Build cross attention based on mode
+        if image_attn_mode == "cross":
+            self.cross_attn = MultiHeadAttention(
+                channels,
+                ctx_channels=ctx_channels,
+                num_heads=num_heads,
+                type="cross",
+                attn_mode="full",
+                qkv_bias=qkv_bias,
+                qk_rms_norm=qk_rms_norm_cross,
+            )
+        elif image_attn_mode == "proj":
+            _proj_in = proj_in_channels if proj_in_channels is not None else ctx_channels
+            cross_attn_block = MultiHeadAttention(
+                channels,
+                ctx_channels=ctx_channels,
+                num_heads=num_heads,
+                type="cross",
+                attn_mode="full",
+                qkv_bias=qkv_bias,
+                qk_rms_norm=qk_rms_norm_cross,
+            )
+            self.cross_attn = ProjectAttention(cross_attn_block, channels, _proj_in)
+        elif image_attn_mode == "gated_proj":
+            _dino_in = proj_in_channels if proj_in_channels is not None else ctx_channels
+            _vae_in = vae_in_channels if vae_in_channels is not None else 16
+            cross_attn_block = MultiHeadAttention(
+                channels,
+                ctx_channels=ctx_channels,
+                num_heads=num_heads,
+                type="cross",
+                attn_mode="full",
+                qkv_bias=qkv_bias,
+                qk_rms_norm=qk_rms_norm_cross,
+            )
+            self.cross_attn = GatedProjectAttention(cross_attn_block, channels, _dino_in, _vae_in)
+        else:
+            raise ValueError(f"Unknown image attention mode: {image_attn_mode}")        
+        
         self.mlp = FeedForwardNet(
             channels,
             mlp_ratio=mlp_ratio,

@@ -13,6 +13,13 @@ from .sparse_elastic_mixin import SparseTransformerElasticMixin
     
 
 class SLatFlowModel(nn.Module):
+    """
+    Structured Latent Flow Model for 3D generation.
+    
+    Supports two conditioning modes:
+    - "cross": Standard cross-attention with image features
+    - "proj": View-aligned projection attention with camera-aware features
+    """    
     def __init__(
         self,
         resolution: int,
@@ -32,6 +39,10 @@ class SLatFlowModel(nn.Module):
         initialization: str = 'vanilla',
         qk_rms_norm: bool = False,
         qk_rms_norm_cross: bool = False,
+        image_attn_mode: Literal["cross", "proj", "gated_proj"] = "cross",
+        proj_in_channels: Optional[int] = None,
+        vae_in_channels: Optional[int] = None,
+        **kwargs        
     ):
         super().__init__()
         self.resolution = resolution
@@ -48,6 +59,9 @@ class SLatFlowModel(nn.Module):
         self.initialization = initialization
         self.qk_rms_norm = qk_rms_norm
         self.qk_rms_norm_cross = qk_rms_norm_cross
+        self.image_attn_mode = image_attn_mode
+        self.proj_in_channels = proj_in_channels
+        self.vae_in_channels = vae_in_channels        
         self.dtype = str_to_dtype(dtype)
 
         self.t_embedder = TimestepEmbedder(model_channels)
@@ -75,6 +89,9 @@ class SLatFlowModel(nn.Module):
                 share_mod=self.share_mod,
                 qk_rms_norm=self.qk_rms_norm,
                 qk_rms_norm_cross=self.qk_rms_norm_cross,
+                image_attn_mode=image_attn_mode,
+                proj_in_channels=proj_in_channels,
+                vae_in_channels=vae_in_channels,                                
             )
             for _ in range(num_blocks)
         ])
@@ -144,7 +161,11 @@ class SLatFlowModel(nn.Module):
                         nn.init.constant_(module.bias, 0)
             for block in self.blocks:
                 block.self_attn.to_out.apply(_scaled_init)
-                block.cross_attn.to_out.apply(_scaled_init)
+                # Handle cross, proj, and gated_proj modes
+                if self.image_attn_mode in ("proj", "gated_proj"):
+                    block.cross_attn.cross_attn_block.to_out.apply(_scaled_init)
+                else:
+                    block.cross_attn.to_out.apply(_scaled_init)   
                 block.mlp.mlp[2].apply(_scaled_init)
             
             # Initialize input layer to make the initial representation have variance 1
@@ -172,14 +193,26 @@ class SLatFlowModel(nn.Module):
         self,
         x: sp.SparseTensor,
         t: torch.Tensor,
-        cond: Union[torch.Tensor, List[torch.Tensor]],
+        cond: Union[torch.Tensor, List[torch.Tensor], Dict[str, Union[torch.Tensor, sp.SparseTensor]], Tuple],
         concat_cond: Optional[sp.SparseTensor] = None,
         **kwargs
     ) -> sp.SparseTensor:
+        """
+        Forward pass.
+        
+        Args:
+            x: SparseTensor input
+            t: Timestep tensor [B]
+            cond: Conditioning tensor. For "cross" mode: list of tensors or tensor.
+                  For "proj" mode: dict {'global': global_cond, 'proj': proj_cond} 
+                  or tuple of (global_cond, proj_cond)
+            concat_cond: Optional concatenation condition
+        
+        Returns:
+            SparseTensor output
+        """
         if concat_cond is not None:
             x = sp.sparse_cat([x, concat_cond], dim=-1)
-        if isinstance(cond, list):
-            cond = sp.VarLenTensor.from_tensor_list(cond)
 
         h = self.input_layer(x)
         h = manual_cast(h, self.dtype)
@@ -187,11 +220,36 @@ class SLatFlowModel(nn.Module):
         if self.share_mod:
             t_emb = self.adaLN_modulation(t_emb)
         t_emb = manual_cast(t_emb, self.dtype)
-        cond = manual_cast(cond, self.dtype)
 
         if self.pe_mode == "ape":
             pe = self.pos_embedder(h.coords[:, 1:])
             h = h + manual_cast(pe, self.dtype)
+            
+        # Handle different conditioning modes
+        if self.image_attn_mode == 'proj':
+            if isinstance(cond, dict):
+                global_cond = cond['global']
+                proj_cond = cond['proj']
+            else:
+                global_cond, proj_cond = cond
+            if isinstance(global_cond, list):
+                global_cond = sp.VarLenTensor.from_tensor_list(global_cond)
+            global_cond = manual_cast(global_cond, self.dtype)
+            proj_cond = manual_cast(proj_cond, self.dtype)
+            cond = (global_cond, proj_cond)
+        elif self.image_attn_mode == 'gated_proj':
+            global_cond = cond['global']
+            if isinstance(global_cond, list):
+                global_cond = sp.VarLenTensor.from_tensor_list(global_cond)
+            global_cond = manual_cast(global_cond, self.dtype)
+            proj_semantic = manual_cast(cond['proj_semantic'], self.dtype)
+            proj_color = manual_cast(cond['proj_color'], self.dtype)
+            cond = {'global': global_cond, 'proj_semantic': proj_semantic, 'proj_color': proj_color}
+        else:
+            if isinstance(cond, list):
+                cond = sp.VarLenTensor.from_tensor_list(cond)
+            cond = manual_cast(cond, self.dtype)
+
         for block in self.blocks:
             h = block(h, t_emb, cond)
 
