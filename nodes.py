@@ -5247,6 +5247,7 @@ class Trellis2RenderMultiViewNvdiffrast:
                 "ortho_scale": ("FLOAT", {"default": 1.1, "min": 0.05, "max": 10.0, "step": 0.01}),
                 "azimuths": ("STRING",{"default":"180,0,90,270,0,0"}),
                 "elevations": ("STRING",{"default":"0,0,0,0,90,-90"}),
+                "add_shading": ("BOOLEAN", {"default": True, "tooltip": "A simple Lambert shading"}),
             },
         }
     
@@ -5256,7 +5257,7 @@ class Trellis2RenderMultiViewNvdiffrast:
     CATEGORY = "Trellis2Wrapper"
     OUTPUT_NODE = True
     
-    def render_view_nvdiffrast(self, mesh, elev, azim, resolution, scale):
+    def render_view_nvdiffrast(self, mesh, elev, azim, resolution, scale, add_shading):
         verts = torch.from_numpy(mesh.vertices).float().cuda()
         faces = torch.from_numpy(mesh.faces).int().cuda()
         uvs   = torch.from_numpy(mesh.visual.uv).float().cuda()
@@ -5297,11 +5298,41 @@ class Trellis2RenderMultiViewNvdiffrast:
             align_corners=True
         )[0]
         
-        return color.permute(1,2,0), rast
+        color = color.permute(1,2,0)
+
+        if add_shading:
+            # ---------------- SHADING LAMBERT ----------------
+            # Per-vertex normals
+            normals = torch.from_numpy(mesh.vertex_normals).float().cuda()
+            normals_cam = normals @ R.T
+            normals_cam = torch.nn.functional.normalize(normals_cam, dim=1)
+
+            # Normals interpolation per-pixel
+            normals_attr = dr.interpolate(normals_cam.unsqueeze(0), rast, faces)[0]  # (H,W,3)
+            normals_attr = torch.nn.functional.normalize(normals_attr, dim=-1)
+
+            # Directional light in camera space (front camera)
+            light_dir = torch.tensor([0, 0, 1], device=verts.device).float()
+            light_dir = torch.nn.functional.normalize(light_dir, dim=0)
+
+            # Lambert: max(dot(n, l), 0)
+            shading = torch.clamp((normals_attr * light_dir).sum(dim=-1, keepdim=True), 0, 1)  # (H,W,1)
+        
+            shaded_rgb = (color[..., :3] * shading).squeeze(0)
+
+            # Apply shading only to RGB channels (keep alpha as is if present)
+            if color.shape[-1] == 4:
+                alpha   = color[..., 3:]
+                color = torch.cat([shaded_rgb, alpha], dim=-1)
+            else:
+                color = shaded_rgb
+        
+        return color, rast
     
     def render(
         self,
         elev, azim,
+        add_shading,
         resolution=None,
         tex=None,
         keep_alpha=True,
@@ -5319,7 +5350,7 @@ class Trellis2RenderMultiViewNvdiffrast:
                 tex = tex.unsqueeze(-1)
             tex = tex.float().to(self.device)
         
-        image, rast = self.render_view_nvdiffrast(mesh, elev, azim, resolution, scale)
+        image, rast = self.render_view_nvdiffrast(mesh, elev, azim, resolution, scale, add_shading)
         
         rast = rast[0]
         mask = (rast[:, :, 3:4] > 0).float() 
@@ -5338,11 +5369,12 @@ class Trellis2RenderMultiViewNvdiffrast:
         
         return image.cpu()
     
-    def render_textured_multiview(self, camera_elevs, camera_azims, ortho_scale, resolution, mesh):      
+    def render_textured_multiview(self, camera_elevs, camera_azims, ortho_scale, resolution, mesh, add_shading):      
         textured_maps = []
         for elev, azim in zip(camera_elevs, camera_azims):
             textured_map = self.render(
                 elev, azim, 
+                add_shading,
                 return_type='th', 
                 scale=ortho_scale, 
                 resolution=resolution,
@@ -5357,7 +5389,8 @@ class Trellis2RenderMultiViewNvdiffrast:
         render_size,
         ortho_scale,
         azimuths,
-        elevations
+        elevations,
+        add_shading
     ):
         reset_cuda()
         
@@ -5372,7 +5405,7 @@ class Trellis2RenderMultiViewNvdiffrast:
                 raise Exception("azimuths and elevations must have the same amount of values")
                 
             textured_maps = self.render_textured_multiview(custom_el_list, custom_az_list, 
-                ortho_scale, render_size, trimesh)
+                ortho_scale, render_size, trimesh, add_shading)
             custom_images = torch.stack(textured_maps, dim=0)
                         
             return (custom_images, ortho_scale, azimuths, elevations,)
