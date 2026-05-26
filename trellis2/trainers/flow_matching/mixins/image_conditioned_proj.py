@@ -404,6 +404,7 @@ class DinoV3ProjFeatureExtractor(nn.Module):
         
         # NAF upsampler (frozen, no trainable params)
         self.naf_model = None  # Lazy-loaded on first use to avoid import if not needed
+        self.naf_download_if_missing = True  # Allow downloading NAF model if not cached
 
         # Per-axis spatial tile factor for the NAF + proj_grid streaming path. 1 = un-tiled
         # (current behavior, default). >1 enables a streaming wrapper that tiles NAF and
