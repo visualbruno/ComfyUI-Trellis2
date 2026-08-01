@@ -7148,6 +7148,9 @@ class Trellis2RenderMultiViewNvdiffrast:
     
     def render_view_nvdiffrast(self, mesh, elev, azim, resolution, scale, add_shading):
         verts = torch.from_numpy(mesh.vertices).float().cuda()
+        # Center mesh at origin
+        center = (verts.max(dim=0).values + verts.min(dim=0).values) * 0.5
+        verts = verts - center
         faces = torch.from_numpy(mesh.faces).int().cuda()
         uvs   = torch.from_numpy(mesh.visual.uv).float().cuda()
         
@@ -7158,7 +7161,11 @@ class Trellis2RenderMultiViewNvdiffrast:
         verts_cam = verts @ R.T + T
         
         verts_h = torch.cat([verts_cam, torch.ones_like(verts_cam[:, :1])], dim=1)
-        
+
+        # Check mesh size, ensure it fits inside the camera view
+        bbox = verts.max(dim=0).values - verts.min(dim=0).values
+        max_dim = bbox.max().item()
+        scale = max(scale, max_dim * 1.1)
         P = self.ortho_projection(scale, verts.device)
         verts_clip = (P @ verts_h.T).T
 
