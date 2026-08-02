@@ -106,6 +106,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         self.rembg_model = rembg_model
         self._low_vram = low_vram
         self.default_pipeline_type = default_pipeline_type
+        self.naf_target_size_override = None
         self.VGGT_model = None
         self.pbr_attr_layout = {
             'base_color': slice(0, 3),
@@ -292,7 +293,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             return self.pixal3d_image_cond_ss
         
         print('Loading Pixal3D Image Cond SS Model ...')
-        model = build_pixal3d_image_cond_model(self.PIXAL3D_IMAGE_COND_CONFIGS["ss"])
+        model = build_pixal3d_image_cond_model(self._get_pixal3d_config("ss"))
         self.pixal3d_image_cond_ss = model
         return model
         
@@ -307,7 +308,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             return self.pixal3d_image_cond_shape_512
         
         print('Loading Pixal3D Image Cond Shape 512 Model ...')
-        model = build_pixal3d_image_cond_model(self.PIXAL3D_IMAGE_COND_CONFIGS["shape_512"])
+        model = build_pixal3d_image_cond_model(self._get_pixal3d_config("shape_512"))
         self.pixal3d_image_cond_shape_512 = model
         return model
         
@@ -322,7 +323,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             return self.pixal3d_image_cond_shape_1024
         
         print('Loading Pixal3D Image Cond Shape 1024 Model ...')
-        model = build_pixal3d_image_cond_model(self.PIXAL3D_IMAGE_COND_CONFIGS["shape_1024"])
+        model = build_pixal3d_image_cond_model(self._get_pixal3d_config("shape_1024"))
         self.pixal3d_image_cond_shape_1024 = model
         return model
         
@@ -337,7 +338,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             return self.pixal3d_image_cond_tex_1024
         
         print('Loading Pixal3D Image Cond Tex 1024 Model ...')
-        model = build_pixal3d_image_cond_model(self.PIXAL3D_IMAGE_COND_CONFIGS["tex_1024"])
+        model = build_pixal3d_image_cond_model(self._get_pixal3d_config("tex_1024"))
         self.pixal3d_image_cond_tex_1024 = model
         return model
         
@@ -560,9 +561,9 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             dict with 'cond' and 'neg_cond', each containing {'global': ..., 'proj': ...}
         """
         print('Getting Proj Image Cond ...')
-        device = self.device        
-        #image_cond_model = self.image_cond_model
-        if self.low_vram:
+        device = self.device
+        was_on_cpu = next(image_cond_model.parameters()).device.type == 'cpu'
+        if was_on_cpu:
             image_cond_model.to(device)
         cam_angle = torch.tensor([camera_angle_x], device=device)
         dist_tensor = torch.tensor([distance], device=device)
@@ -570,7 +571,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         z_global, z_proj = image_cond_model(
             image, camera_angle_x=cam_angle, distance=dist_tensor, mesh_scale=scale_tensor,
         )
-        if self.low_vram:
+        if self.low_vram and was_on_cpu:
             image_cond_model.cpu()
         return {
             'cond': {'global': z_global, 'proj': z_proj},
@@ -605,7 +606,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         """
         print('Getting Projected Image Cond ...')
         device = self.device
-        if self.low_vram:
+        was_on_cpu = next(image_cond_model.parameters()).device.type == 'cpu'
+        if was_on_cpu:
             image_cond_model.to(device)
 
         orig_grid_res = image_cond_model.grid_resolution
@@ -639,7 +641,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                 image_resolution=image_cond_model.proj_grid.image_resolution,
             ).to(device)
 
-        if self.low_vram:
+        if self.low_vram and was_on_cpu:
             image_cond_model.cpu()
         return {
             'cond': {'global': z_global, 'proj': z_proj_st},
