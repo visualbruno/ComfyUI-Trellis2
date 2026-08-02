@@ -404,6 +404,7 @@ class DinoV3ProjFeatureExtractor(nn.Module):
         
         # NAF upsampler (frozen, no trainable params)
         self.naf_model = None  # Lazy-loaded on first use to avoid import if not needed
+        self.naf_download_if_missing = True
 
         # Per-axis spatial tile factor for the NAF + proj_grid streaming path. 1 = un-tiled
         # (current behavior, default). >1 enables a streaming wrapper that tiles NAF and
@@ -433,27 +434,32 @@ class DinoV3ProjFeatureExtractor(nn.Module):
     def _load_naf(self):
         """Lazy-load pretrained NAF model."""
         if self.naf_model is None:
-            import torch.hub
-            device = next(self.model.parameters()).device            
-            cached_repo = self._cached_naf_repo()
-            
-            if cached_repo is not None:
-                self.naf_model = torch.hub.load(
-                    cached_repo, "naf", pretrained=True, device=device, source="local", trust_repo=True
-                )
-            else:
-                self.naf_model = torch.hub.load(
-                    "valeoai/NAF", "naf", pretrained=True, device=device, trust_repo=True
-                )            
+            try:
+                import torch.hub
+                device = next(self.model.parameters()).device            
+                cached_repo = self._cached_naf_repo()
+                
+                if cached_repo is not None:
+                    self.naf_model = torch.hub.load(
+                        cached_repo, "naf", pretrained=True, device=device, source="local", trust_repo=True
+                    )
+                else:
+                    self.naf_model = torch.hub.load(
+                        "valeoai/NAF", "naf", pretrained=True, device=device, trust_repo=True
+                    )            
 
-            self.naf_model.eval()
-            self.naf_model.requires_grad_(False)
+                self.naf_model.eval()
+                self.naf_model.requires_grad_(False)
+            except Exception as e:
+                import warnings
+                warnings.warn(f"NAF model loading failed ({e}), falling back to non-NAF mode")
+                self.naf_model = False
         
     def to(self, device):
         super().to(device)
         self.model.to(device)
         self.proj_grid.to(device)
-        if self.naf_model is not None:
+        if self.naf_model is not None and self.naf_model is not False:
             self.naf_model.to(device)
         return self
 
@@ -461,7 +467,7 @@ class DinoV3ProjFeatureExtractor(nn.Module):
         super().cuda()
         self.model.cuda()
         self.proj_grid.cuda()
-        if self.naf_model is not None:
+        if self.naf_model is not None and self.naf_model is not False:
             self.naf_model.cuda()
         return self
 
@@ -469,7 +475,7 @@ class DinoV3ProjFeatureExtractor(nn.Module):
         super().cpu()
         self.model.cpu()
         self.proj_grid.cpu()
-        if self.naf_model is not None:
+        if self.naf_model is not None and self.naf_model is not False:
             self.naf_model.cpu()
         return self
     
@@ -560,7 +566,7 @@ class DinoV3ProjFeatureExtractor(nn.Module):
             )  # [B, grid_res³, D]
             
             # --- High-resolution branch (NAF): upsample then sample ---
-            if self.use_naf_upsample:
+            if self.use_naf_upsample and self.naf_model is not False:
                 self._load_naf()
                 # NAF expects: guide [B, 3, H, W], lr_features [B, C, h, w], target_size (H', W')
                 lr_features_bchw = z_patchtokens_spatial.permute(0, 3, 1, 2)  # [B, D, h, w]

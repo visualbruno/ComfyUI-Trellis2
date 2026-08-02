@@ -520,6 +520,11 @@ class Trellis2LoadModel:
             isPixal3D = True
         
         pipeline = Trellis2ImageTo3DPipeline.from_pretrained(model_path, keep_models_loaded = keep_models_loaded, use_fp8=use_fp8, use_reconviagen=use_reconviagen, isPixal3D = isPixal3D)
+        # Pixal3D NAFF model uses NATTEN for feature upsampling.
+        # Windows prebuilt NATTEN wheels (torch 2.7.0, cu128, cp312):
+        #   https://hf-mirror.com/lldacing/NATTEN-windows
+        # For issues/questions about Pixal3D Windows setup:
+        #   https://space.bilibili.com/37411464
         pipeline.low_vram = low_vram
         
         # if naf_chunk_size == "None":
@@ -3965,6 +3970,9 @@ class Trellis2ImageCondGenerator:
                 "image": ("IMAGE",),
                 "max_views": ("INT", {"default": 1, "min": 1, "max": 999}),
             },
+            "optional": {
+                "naf_target_size": ("INT", {"default": 256, "min": 128, "max": 1024, "step": 64}),
+            },
         }
 
     RETURN_TYPES = ("IMAGE_COND", "IMAGE_COND", "TRELLIS2PIPELINE", "MOGE_CAM_CONFIG")
@@ -3973,7 +3981,7 @@ class Trellis2ImageCondGenerator:
     CATEGORY = "Trellis2Wrapper"
     OUTPUT_NODE = True
 
-    def process(self, pipeline, image, max_views,):                                   
+    def process(self, pipeline, image, max_views, naf_target_size=256):                                   
         images = tensor_batch_to_pil_list(image, max_views=max_views)
         image_in = images[0] if len(images) == 1 else images        
         
