@@ -2295,7 +2295,446 @@ class Trellis2ReconstructMesh:
         mesh_copy.vertices = vertices.to(mesh_copy.device)
         mesh_copy.faces = faces.to(mesh_copy.device) 
                 
-        return (mesh_copy,)   
+        return (mesh_copy,)
+
+def dcx_sample_surface(vertices, faces, num_points, seed=0, chunk=1000000):
+    """Area-weighted surface sampling on the GPU (avoids a pytorch3d dependency).
+
+    DCx consumes a dense surface point cloud rather than a mesh, so this is the
+    bridge between a Trellis2 mesh and dcx_pkg. DCx itself is CPU-only; this is the
+    one GPU stage, and the points are moved to host memory per chunk.
+
+    chunk trades VRAM for nothing much above 1M: sampling 16M points costs +98 MB at
+    1M/chunk vs +772 MB at 8M/chunk, and the small chunk is no slower. The allocation
+    is transient - no VRAM is held once this returns.
+    """
+    tri = vertices[faces.long()]                                       # [F,3,3]
+    areas = torch.linalg.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]).norm(dim=1)
+    if float(areas.sum()) <= 0.0:
+        raise ValueError("Mesh has zero total surface area, cannot sample points for DCx.")
+    probs = areas / areas.sum()
+
+    gen = torch.Generator(device=vertices.device).manual_seed(seed)
+    out = []
+    remaining = int(num_points)
+    while remaining > 0:
+        n = min(chunk, remaining)
+        picked = tri[torch.multinomial(probs, n, replacement=True, generator=gen)]
+        u = torch.rand(n, 1, device=vertices.device, generator=gen)
+        w = torch.rand(n, 1, device=vertices.device, generator=gen)
+        flip = (u + w) > 1.0                                           # fold back into the triangle
+        u = torch.where(flip, 1.0 - u, u)
+        w = torch.where(flip, 1.0 - w, w)
+        p = picked[:, 0] + u * (picked[:, 1] - picked[:, 0]) + w * (picked[:, 2] - picked[:, 0])
+        out.append(p.cpu().numpy().astype(np.float32))
+        remaining -= n
+    return np.concatenate(out, axis=0)
+
+def _dcx_radical_inverse_2(k, bits=24):
+    """van der Corput sequence, base 2, vectorised over int64 k."""
+    out = torch.zeros_like(k, dtype=torch.float64)
+    f = 0.5
+    kk = k.clone()
+    for _ in range(bits):
+        out += (kk & 1).to(torch.float64) * f
+        kk = kk >> 1
+        f *= 0.5
+    return out
+
+def dcx_sample_surface_stratified(vertices, faces, num_points, chunk=1000000):
+    """Low-discrepancy surface sampling: deterministic per-triangle budget + Hammersley.
+
+    Random area-weighted sampling leaves Poisson coverage gaps - P(voxel empty) = e^-lambda -
+    and DCx needs consistent coverage, not merely one hit per voxel. Giving each triangle a
+    fixed area-proportional budget and filling it with a Hammersley set removes both the
+    inter-triangle lottery and most of the intra-triangle clumping. Measured on a torus at
+    resolution 512: watertight at 4M points, where random sampling still had holes at 16M.
+
+    Every triangle gets at least one sample, so tiny faces are never skipped; that means the
+    returned count is max(num_points, num_faces) and can exceed the request slightly.
+    """
+    tri = vertices[faces.long()]                                       # [F,3,3]
+    areas = torch.linalg.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]).norm(dim=1) * 0.5
+    total = float(areas.sum())
+    if total <= 0.0:
+        raise ValueError("Mesh has zero total surface area, cannot sample points for DCx.")
+
+    n = torch.clamp((areas / total * float(num_points)).floor().to(torch.int64), min=1)
+    offsets = torch.cat([torch.zeros(1, dtype=torch.int64, device=n.device), n.cumsum(0)])
+    total_n = int(offsets[-1])
+
+    out = []
+    for start in range(0, total_n, chunk):
+        end = min(start + chunk, total_n)
+        gidx = torch.arange(start, end, device=vertices.device, dtype=torch.int64)
+        t = torch.searchsorted(offsets, gidx, right=True) - 1          # owning triangle
+        k = gidx - offsets[t]                                          # index within triangle
+        u = ((k.to(torch.float64) + 0.5) / n[t].to(torch.float64)).to(torch.float32)
+        v = _dcx_radical_inverse_2(k).to(torch.float32)
+        su = u.sqrt()                                                  # uniform over the triangle
+        b0, b1, b2 = (1.0 - su), su * (1.0 - v), su * v
+        p = (tri[t, 0] * b0[:, None] + tri[t, 1] * b1[:, None] + tri[t, 2] * b2[:, None])
+        out.append(p.cpu().numpy().astype(np.float32))
+    return np.concatenate(out, axis=0)
+
+def _dcx_fibonacci_dirs(n, device):
+    i = torch.arange(n, dtype=torch.float32, device=device) + 0.5
+    phi = torch.acos(1.0 - 2.0 * i / n)
+    theta = math.pi * (1.0 + 5.0 ** 0.5) * i
+    return torch.stack([torch.sin(phi) * torch.cos(theta),
+                        torch.sin(phi) * torch.sin(theta),
+                        torch.cos(phi)], dim=1)
+
+def dcx_cull_inner_faces(vertices, faces, num_rays=32, chunk=2000000, verbose=True):
+    """Drop faces that cannot be reached from outside the mesh.
+
+    Trellis2 meshes routinely carry internal geometry (hence remove_inner_faces elsewhere in
+    this file). DCx contours whatever surface it is given, so those internal faces come back
+    as an internal shell - and, because sampling is area-weighted, they also steal a large
+    slice of the point budget from the visible surface, which shows up as holes.
+
+    A face is internal when neither of its sides can see infinity. Probing along +/- the face
+    normal first resolves anything convex on the first try; the Fibonacci directions catch the
+    rest. Note this uses ray escape rather than CuMesh's raystab signed distance, because face
+    centroids lie exactly on the surface where the signed distance is ~0 and carries no signal.
+    """
+    tri = vertices[faces.long()]
+    centers = tri.mean(dim=1)
+    normals = torch.linalg.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    normals = normals / normals.norm(dim=1, keepdim=True).clamp_min(1e-20)
+    eps = float((vertices.amax(0) - vertices.amin(0)).norm()) * 1e-4
+
+    bvh = CuMesh.remeshing.cuBVH(vertices, faces)
+    num_faces = faces.shape[0]
+    visible = torch.zeros(num_faces, dtype=torch.bool, device=vertices.device)
+
+    directions = [normals, -normals]
+    fib = _dcx_fibonacci_dirs(num_rays, vertices.device)
+    directions += [fib[k].expand(num_faces, 3) for k in range(num_rays)]
+
+    for d in directions:
+        todo = (~visible).nonzero(as_tuple=True)[0]
+        if todo.numel() == 0:
+            break
+        for side in (1.0, -1.0):
+            sub = todo[~visible[todo]]
+            if sub.numel() == 0:
+                break
+            for i in range(0, sub.numel(), chunk):
+                s = sub[i:i + chunk]
+                origin = centers[s] + (side * eps) * normals[s]
+                _, face_id, _ = bvh.ray_trace(origin.contiguous(), d[s].contiguous())
+                visible[s] |= (face_id < 0)                            # -1 == ray escaped
+
+    kept = int(visible.sum())
+    if verbose:
+        print(f"DCx: inner-face cull kept {kept}/{num_faces} faces "
+              f"({100.0 * kept / max(num_faces, 1):.1f}%)")
+    if kept == 0:
+        raise RuntimeError("DCx inner-face cull removed every face; disable cull_inner_faces.")
+    return faces[visible]
+    
+def dcx_orient_faces_old(vertices, faces, src_vertices, src_faces, src_normals, verbose=True):
+    """Give DCx's output a consistent outward winding.
+
+    DCx extracts a NON-manifold zero-level set, so it emits each face with arbitrary
+    winding - measured at 43-44% back-facing. A viewer that culls or lights by winding
+    then draws those triangles dark, which reads as speckled holes even though no
+    geometry is missing. Global propagation can't fix a non-manifold surface, so orient
+    every face independently against the source normal at its closest point.
+    """
+    vt = torch.from_numpy(np.ascontiguousarray(vertices)).cuda()
+    ft = torch.from_numpy(np.ascontiguousarray(faces)).cuda().long()
+    tri = vt[ft]
+    n = torch.linalg.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    n = n / n.norm(dim=1, keepdim=True).clamp_min(1e-20)
+    centers = tri.mean(dim=1)
+    del tri
+
+    bvh = CuMesh.remeshing.cuBVH(src_vertices, src_faces)
+    flip = torch.empty(len(centers), dtype=torch.bool, device="cuda")
+    for i in range(0, len(centers), 524288):
+        e = min(i + 524288, len(centers))
+        _, fid, _ = bvh.unsigned_distance(centers[i:e])
+        dots = (n[i:e] * src_normals[fid.long().reshape(-1)]).sum(dim=1)
+        flip[i:e] = dots < 0
+    del bvh, n, centers
+
+    nflip = int(flip.sum())
+    if nflip:
+        ft[flip] = ft[flip][:, [0, 2, 1]]
+    if verbose:
+        print(f"DCx: reoriented {nflip:,} back-facing triangles "
+              f"({100.0*nflip/max(len(faces),1):.1f}%)")
+    return ft.cpu().numpy().astype(np.int64)    
+
+def dcx_orient_faces(vertices, faces, src_vertices, src_faces, resolution, verbose=True):
+    """Give DCx's output a consistent outward winding.
+
+    DCx emits every face with arbitrary winding (~44% back-facing, 24% of adjacent
+    pairs disagreeing), which a culling viewer draws as speckled holes.
+
+    Two ingredients, and both are needed:
+
+    1. PROPAGATION. 'Orient consistently' is 2-colouring over manifold-edge adjacency,
+       solved exactly by doubling the graph (face-as-is vs face-flipped) and taking
+       connected components, so neighbours agree by construction. This is what makes
+       the result smooth; a per-face decision alone leaves ~21% disagreement because
+       the closest-point normal is noisy at thin features.
+
+    2. A PER-PATCH VOTE for each component's global sign. Source normals are by far
+       the better signal when the source winding is self-consistent (a CuMesh remesh
+       is 0.00% inconsistent) - measured 0.22% final disagreement. Ray-stabbing is a
+       poor signal even then: it called that same clean mesh only 47.6% outward.
+       But on a raw Trellis2 voxel mesh the source winding is itself ~24% inconsistent
+       and useless as a reference, so fall back to ray-stab there.
+
+    Feeding DCx a clean manifold mesh also makes its output fully orientable (0.0%
+    non-orientable, vs 16-32% from a raw voxel mesh), so the choice of input matters
+    more than the choice of algorithm.
+    """
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    faces = np.ascontiguousarray(faces).astype(np.int64)
+    N = len(faces)
+    if N == 0:
+        return faces
+    NV = int(faces.max()) + 1
+
+    de = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]], axis=0)
+    fidx = np.tile(np.arange(N, dtype=np.int64), 3)
+    key = np.sort(de, axis=1)
+    rev = de[:, 0] != key[:, 0]
+    code = key[:, 0].astype(np.int64) * NV + key[:, 1].astype(np.int64)
+    _, inv, cnt = np.unique(code, return_inverse=True, return_counts=True)
+
+    sel = np.flatnonzero(cnt[inv] == 2)                  # manifold edges only
+    sel = sel[np.argsort(inv[sel], kind='stable')]       # pair them up consecutively
+    a, b = fidx[sel[0::2]], fidx[sel[1::2]]
+    # two faces agree across an edge when they traverse it in opposite directions
+    agree = rev[sel[0::2]] != rev[sel[1::2]]
+
+    src = np.concatenate([a, a + N])
+    dst = np.concatenate([np.where(agree, b, b + N), np.where(agree, b + N, b)])
+    graph = coo_matrix((np.ones(len(src), np.int8), (src, dst)), shape=(2 * N, 2 * N))
+    ncomp, lab = connected_components(graph, directed=False)
+
+    # is the source winding self-consistent enough to be an orientation reference?
+    sf = src_faces.detach().cpu().numpy().astype(np.int64)
+    sNV = int(sf.max()) + 1
+    sde = np.concatenate([sf[:, [0, 1]], sf[:, [1, 2]], sf[:, [2, 0]]], axis=0)
+    skey = np.sort(sde, axis=1)
+    srev = sde[:, 0] != skey[:, 0]
+    scode = skey[:, 0].astype(np.int64) * sNV + skey[:, 1].astype(np.int64)
+    _, sinv, scnt = np.unique(scode, return_inverse=True, return_counts=True)
+    ssel = np.flatnonzero(scnt[sinv] == 2)
+    ssel = ssel[np.argsort(sinv[ssel], kind='stable')]
+    npair = max(len(ssel) // 2, 1)
+    src_bad = float((srev[ssel[0::2]] == srev[ssel[1::2]]).sum()) / npair
+    use_src_normals = src_bad < 0.02
+    del sde, skey, scode, sinv, scnt, ssel
+
+    # per-face preference, used only as a vote within each patch
+    vt = torch.from_numpy(np.ascontiguousarray(vertices)).cuda()
+    ft = torch.from_numpy(faces).cuda()
+    tri = vt[ft]
+    n = torch.linalg.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    n = n / n.norm(dim=1, keepdim=True).clamp_min(1e-20)
+    centers = tri.mean(dim=1)
+    del tri, vt
+
+    bvh = CuMesh.remeshing.cuBVH(src_vertices, src_faces)
+    keep = torch.empty(N, dtype=torch.bool, device="cuda")
+    if use_src_normals:
+        stri = src_vertices[src_faces.long()]
+        sn = torch.linalg.cross(stri[:, 1] - stri[:, 0], stri[:, 2] - stri[:, 0])
+        sn = sn / sn.norm(dim=1, keepdim=True).clamp_min(1e-20)
+        del stri
+        for i in range(0, N, 524288):
+            e = min(i + 524288, N)
+            _, fid, _ = bvh.unsigned_distance(centers[i:e])
+            keep[i:e] = (n[i:e] * sn[fid.long().reshape(-1)]).sum(dim=1) >= 0
+        del sn
+    else:
+        eps = 2.0 / resolution
+        for i in range(0, N, 262144):
+            e = min(i + 262144, N)
+            dp = bvh.signed_distance(centers[i:e] + n[i:e] * eps, mode='raystab')[0].reshape(-1)
+            dm = bvh.signed_distance(centers[i:e] - n[i:e] * eps, mode='raystab')[0].reshape(-1)
+            keep[i:e] = dp >= dm
+    del bvh, n, centers, ft
+    kp = keep.cpu().numpy()
+
+    score = np.zeros(ncomp, dtype=np.int64)
+    np.add.at(score, lab[:N], np.where(kp, 1, -1))
+    np.add.at(score, lab[N:], np.where(kp, -1, 1))
+
+    flip = score[lab[N:]] > score[lab[:N]]
+    out = faces.copy()
+    out[flip] = out[flip][:, [0, 2, 1]]
+
+    if verbose:
+        ref = ("source normals" if use_src_normals
+               else f"ray-stab (source winding {100*src_bad:.0f}% inconsistent, unusable)")
+        unorientable = int((lab[:N] == lab[N:]).sum())
+        msg = (f"DCx: reoriented {int(flip.sum()):,} faces across {ncomp:,} patches "
+               f"using {ref}")
+        if unorientable:
+            msg += (f"; {unorientable:,} faces ({100.0*unorientable/N:.1f}%) are in "
+                    f"non-orientable patches and need double-sided rendering")
+        print(msg)
+    return out
+
+def dcx_extract(points, bbox, resolution, enable_thinning, enable_postprocessing,
+                verbose=True, sampling="stratified"):
+    """Dual Contouring over Expanded Cubes (SIGGRAPH 2026), via the dcx_pkg CPU extension.
+
+    Mirrors the GTUDF path of DCx's evaluate_finetune.mesh_extraction, minus the
+    supplementary-sampling stage (that one needs a UDF query callback).
+    """
+    import dcx_pkg
+
+    voxel_ids, voxel_points, bbox, orders = dcx_pkg.points_to_voxels(
+        points=points, bbox=bbox, res=resolution)
+    density = len(points) / max(len(voxel_ids), 1)
+    if verbose:
+        print(f"DCx: {len(voxel_ids)} occupied voxels ({density:.1f} points/voxel)")
+    # Under-sampling doesn't raise, it just punches holes, so warn loudly. The safe density
+    # depends on how the points were placed: random sampling has Poisson gaps and needs ~25
+    # points per occupied voxel, while a low-discrepancy set is already watertight near 3.
+    need = 25.0 if sampling == "random" else 3.0
+    if density < need * 0.6:
+        print(f"DCx WARNING: only {density:.1f} points per occupied voxel ({sampling} sampling). "
+              f"Expect holes. Raise num_points to "
+              f"~{int(len(voxel_ids) * need / 1e6 + 1) * 1000000:,} for resolution {resolution}"
+              + (", or switch sampling to 'stratified' which needs ~8x fewer points."
+                 if sampling == "random" else "."))
+
+    cube_ids, cube_types = dcx_pkg.get_cube_types(
+        voxel_ids=voxel_ids, voxel_points=voxel_points, orders=orders, res=resolution)
+    if verbose:
+        print(f"DCx: {len(cube_ids)} cubes")
+
+    if enable_thinning:
+        voxel_ids, voxel_points, cube_ids, cube_types = dcx_pkg.thinning(
+            voxel_ids=voxel_ids, voxel_points=voxel_points, cube_ids=cube_ids,
+            cube_types=cube_types, orders=orders, res=resolution)
+        if verbose:
+            print(f"DCx: after thinning {len(voxel_ids)} voxels / {len(cube_ids)} cubes")
+
+    _, vertices, faces = dcx_pkg.reconstruction(
+        voxel_ids=voxel_ids, voxel_points=voxel_points, cube_ids=cube_ids,
+        cube_types=cube_types, orders=orders, res=resolution, pattern=0,
+        enable_postprocessing=enable_postprocessing, dataname="comfyui")
+
+    return np.asarray(vertices, dtype=np.float32), np.asarray(faces, dtype=np.int64)
+
+class Trellis2ReconstructMeshDCx:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "mesh": ("MESHWITHVOXEL",),
+                "resolution": ([128,256,512,1024,1536,2048],{"default":256}),
+                "num_points": ("INT",{"default":4000000, "min":100000, "max":500000000, "step":100000}),
+                "sampling": (["stratified","random"],{"default":"stratified"}),
+                "cull_inner_faces": ("BOOLEAN",{"default":True}),
+                "fix_winding": ("BOOLEAN",{"default":True}),
+                "thinning": ("BOOLEAN",{"default":True}),
+                "postprocessing": ("BOOLEAN",{"default":True}),
+                "remove_floaters": ("BOOLEAN",{"default":True}),
+                "seed": ("INT",{"default":0, "min":0, "max":0x7fffffff}),
+            }
+        }
+
+    RETURN_TYPES = ("MESHWITHVOXEL",)
+    RETURN_NAMES = ("mesh",)
+    FUNCTION = "process"
+    CATEGORY = "Trellis2Wrapper"
+    OUTPUT_NODE = True
+
+    def process(self, mesh, resolution, num_points, sampling, cull_inner_faces,
+                fix_winding, thinning, postprocessing, remove_floaters, seed):
+        reset_cuda()
+
+        mesh_copy = copy.deepcopy(mesh)
+        device = mesh_copy.device
+
+        vertices = mesh_copy.vertices.cuda()
+        faces = mesh_copy.faces.cuda()
+
+        # DCx expects the shape normalised into a unit box centred on the origin
+        # (see normalized_mesh in DCx/evaluate_finetune.py). Undo it afterwards so
+        # the result stays aligned with the voxel grid for downstream texturing.
+        lo, hi = vertices.amin(dim=0), vertices.amax(dim=0)
+        center = (lo + hi) * 0.5
+        scale = 1.0 / float((hi - lo).max())
+        vertices_norm = (vertices - center) * scale
+
+        print(f'Reconstructing mesh with DCx (res {resolution}, {num_points:,} points, {sampling}) ...')
+
+        if cull_inner_faces:
+            t0 = time.time()
+            faces = dcx_cull_inner_faces(vertices_norm, faces)
+            print(f"DCx: inner-face cull took {time.time()-t0:.2f}s")
+
+        t0 = time.time()
+        if sampling == "stratified":
+            points = dcx_sample_surface_stratified(vertices_norm, faces, num_points)
+        else:
+            points = dcx_sample_surface(vertices_norm, faces, num_points, seed=seed)
+        print(f"DCx: sampled {len(points):,} surface points in {time.time()-t0:.2f}s")
+
+        lo_n, hi_n = vertices_norm.amin(dim=0).cpu().numpy(), vertices_norm.amax(dim=0).cpu().numpy()
+        bbox = np.hstack((lo_n, hi_n)).astype(np.float32)
+
+        t0 = time.time()
+        new_vertices, new_faces = dcx_extract(points, bbox, resolution, thinning,
+                                              postprocessing, sampling=sampling)
+        print(f"DCx: contouring took {time.time()-t0:.2f}s")
+        del points
+
+        if len(new_faces) == 0:
+            raise RuntimeError(
+                "DCx produced an empty mesh. Try raising num_points: the point cloud must be "
+                "dense enough to hit every surface voxel at this resolution.")
+
+        # if fix_winding:
+            # # must run while new_vertices is still in the normalised frame, since the
+            # # BVH is built on vertices_norm
+            # t0 = time.time()
+            # new_faces = dcx_orient_faces(new_vertices, new_faces,
+                                         # vertices_norm, faces, resolution)
+            # print(f"DCx: winding fix took {time.time()-t0:.2f}s")
+        if fix_winding:
+            # must run while new_vertices is still in the normalised frame, since the
+            # BVH is built on vertices_norm
+            t0 = time.time()
+            st = vertices_norm[faces.long()]
+            sn = torch.linalg.cross(st[:, 1] - st[:, 0], st[:, 2] - st[:, 0])
+            sn = sn / sn.norm(dim=1, keepdim=True).clamp_min(1e-20)
+            del st
+            new_faces = dcx_orient_faces_old(new_vertices, new_faces,
+                                         vertices_norm, faces, sn)
+            del sn
+            print(f"DCx: winding fix took {time.time()-t0:.2f}s")            
+
+        # back into the original frame
+        new_vertices = new_vertices / scale + center.cpu().numpy()
+
+        if remove_floaters:
+            new_vertices, new_faces = remove_floater2(new_vertices, new_faces)
+
+        new_vertices = torch.from_numpy(np.ascontiguousarray(new_vertices)).float()
+        new_faces = torch.from_numpy(np.ascontiguousarray(new_faces)).int()
+
+        print(f"After reconstruction: {len(new_vertices)} vertices, {len(new_faces)} faces")
+
+        mesh_copy.vertices = new_vertices.to(device)
+        mesh_copy.faces = new_faces.to(device)
+
+        return (mesh_copy,)
 
 class Trellis2ReconstructMeshWithQuad:
     @classmethod
@@ -2353,7 +2792,7 @@ class Trellis2MeshTexturing:
                 "texture_guidance_strength": ("FLOAT",{"default":3.00,"min":0.00,"max":99.99,"step":0.01}),
                 "texture_guidance_rescale": ("FLOAT",{"default":0.20,"min":0.00,"max":1.00,"step":0.01}),
                 "texture_rescale_t": ("FLOAT",{"default":3.00,"min":0.00,"max":9.99,"step":0.01}), 
-                "resolution": ([512,1024,1536],{"default":1024}),
+                "resolution": ([512,1024,1536,2048],{"default":1024}),
                 "texture_size": ("INT",{"default":4096,"min":512,"max":16384}),
                 "texture_alpha_mode": (["OPAQUE","MASK","BLEND"],{"default":"OPAQUE"}),
                 "double_side_material": ("BOOLEAN",{"default":False}), 
@@ -2431,7 +2870,7 @@ class Trellis2MeshTexturingMultiView:
                 "texture_guidance_strength": ("FLOAT",{"default":3.00,"min":0.00,"max":99.99,"step":0.01}),
                 "texture_guidance_rescale": ("FLOAT",{"default":0.20,"min":0.00,"max":1.00,"step":0.01}),
                 "texture_rescale_t": ("FLOAT",{"default":3.00,"min":0.00,"max":9.99,"step":0.01}), 
-                "resolution": ([512,1024,1536],{"default":1024}),
+                "resolution": ([512,1024,1536,2048],{"default":1024}),
                 "texture_size": ("INT",{"default":4096,"min":512,"max":16384}),
                 "texture_alpha_mode": (["OPAQUE","MASK","BLEND"],{"default":"OPAQUE"}),
                 "double_side_material": ("BOOLEAN",{"default":False}), 
@@ -3007,7 +3446,7 @@ class Trellis2TrimeshToMeshWithVoxel:
         return {
             "required": {
                 "trimesh": ("TRIMESH",),
-                "resolution": ([512,1024],{"default":1024}),
+                "resolution": ([512,1024,1536,2048],{"default":1024}),
             },
         }
 
@@ -7473,6 +7912,7 @@ NODE_CLASS_MAPPINGS = {
     "Trellis2MeshTexturingMultiView": Trellis2MeshTexturingMultiView,
     "Trellis2WeldVertices": Trellis2WeldVertices,
     "Trellis2ReconstructMeshWithQuad": Trellis2ReconstructMeshWithQuad,
+    "Trellis2ReconstructMeshDCx": Trellis2ReconstructMeshDCx,
     "Trellis2StringSelector": Trellis2StringSelector,
     "Trellis2FillHolesWithCuMesh": Trellis2FillHolesWithCuMesh,
     "Trellis2LaplacianSmoothingWithOpen3d": Trellis2LaplacianSmoothingWithOpen3d,
@@ -7551,6 +7991,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Trellis2MeshTexturingMultiView": "Trellis2 - Mesh Texturing Multi-View",
     "Trellis2WeldVertices": "Trellis2 - Weld Vertices",
     "Trellis2ReconstructMeshWithQuad": "Trellis2 - Reconstruct Mesh With Quad",
+    "Trellis2ReconstructMeshDCx": "Trellis2 - Reconstruct Mesh (DCx)",
     "Trellis2StringSelector": "Trellis2 - String Selector",
     "Trellis2FillHolesWithCuMesh": "Trellis2 - Fill Holes with CuMesh",
     "Trellis2LaplacianSmoothingWithOpen3d": "Trellis2 - Laplacian Smoothing (using open3d)",
