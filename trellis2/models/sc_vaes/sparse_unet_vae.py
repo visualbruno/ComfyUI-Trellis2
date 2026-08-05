@@ -681,7 +681,9 @@ class SparseUnetVaeDecoder(nn.Module):
                     h = block(h)
                 # More frequent cache clearing in low_vram mode to reclaim memory between blocks
                 if self.low_vram:
+                    torch.cuda.synchronize()
                     torch.cuda.empty_cache()
+            torch.cuda.synchronize()
             torch.cuda.empty_cache()                        
         if self.low_vram:
             def fused_finalize(t):
