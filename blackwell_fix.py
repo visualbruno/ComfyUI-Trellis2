@@ -139,7 +139,10 @@ def patch_all(force: bool = False, verbose: bool = True):
     # ── 3) Patch flex_gemm Triton kernels with PyTorch fallbacks ──
     # Triton 3.3.x cannot compile for CC >= 10.0
     try:
-        import flex_gemm.kernels.triton as _fgk
+        try:
+            import flex_gemm.kernels.triton as _fgk
+        except ImportError:
+            _fgk = None
 
         def _fwd(feats, indices, weight):
             idx = indices.long().clamp(0, feats.shape[0] - 1)
