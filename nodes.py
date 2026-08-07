@@ -25,14 +25,23 @@ import copy
 
 import pymeshlab
 
-import cumesh as CuMesh
-import o_voxel
+try:
+    import cumesh as CuMesh
+except Exception:
+    CuMesh = None
+try:
+    import o_voxel
+except Exception:
+    o_voxel = None
 
 import meshlib.mrmeshnumpy as mrmeshnumpy
 import meshlib.mrmeshpy as mrmeshpy
 
 import nvdiffrast.torch as dr
-from flex_gemm.ops.grid_sample import grid_sample_3d
+try:
+    from flex_gemm.ops.grid_sample import grid_sample_3d
+except Exception:
+    grid_sample_3d = None
 
 import comfy.model_management as mm
 from comfy.utils import load_torch_file, ProgressBar, common_upscale
@@ -386,8 +395,10 @@ class Trellis2LoadModel:
             )
         
         reconviagen_pipeline_file = os.path.join(folder_paths.models_dir,'microsoft','TRELLIS.2-4B','reconviagen_pipeline.json')
+        os.makedirs(os.path.dirname(reconviagen_pipeline_file), exist_ok=True)
         if not os.path.exists(reconviagen_pipeline_file):
             source_reconviagen_pipeline_file = os.path.join(script_directory,'reconviagen_pipeline.json')
+            os.makedirs(os.path.dirname(reconviagen_pipeline_file), exist_ok=True)
             shutil.copyfile(source_reconviagen_pipeline_file,reconviagen_pipeline_file)
         
         dinov3_model_path = os.path.join(folder_paths.models_dir,"facebook","dinov3-vitl16-pretrain-lvd1689m","model.safetensors")

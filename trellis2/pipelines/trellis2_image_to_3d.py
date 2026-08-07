@@ -15,12 +15,24 @@ import gc
 import os
 import folder_paths
 import trimesh
-import o_voxel
-import cumesh
+try:
+    import o_voxel
+except Exception:
+    o_voxel = None
+try:
+    import cumesh
+except Exception:
+    cumesh = None
 import nvdiffrast.torch as dr
 import cv2
-import flex_gemm
-from flex_gemm.ops.grid_sample import grid_sample_3d
+try:
+    import flex_gemm
+except Exception:
+    flex_gemm = None
+try:
+    from flex_gemm.ops.grid_sample import grid_sample_3d
+except Exception:
+    grid_sample_3d = None
 
 import random
 
