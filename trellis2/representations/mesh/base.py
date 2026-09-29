@@ -1,8 +1,14 @@
 from typing import *
 import torch
 from ..voxel import Voxel
-import cumesh
-from flex_gemm.ops.grid_sample import grid_sample_3d
+try:
+    import cumesh
+except Exception:
+    cumesh = None
+try:
+    from flex_gemm.ops.grid_sample import grid_sample_3d
+except Exception:
+    grid_sample_3d = None
 
 import numpy as np
 import meshlib.mrmeshnumpy as mrmeshnumpy

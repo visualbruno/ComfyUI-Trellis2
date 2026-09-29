@@ -9,10 +9,16 @@ from . import samplers, rembg
 from ..modules.sparse import SparseTensor
 from ..modules import image_feature_extractor
 import o_voxel
-import cumesh
+try:
+    import cumesh
+except Exception:
+    cumesh = None
 import nvdiffrast.torch as dr
 import cv2
-import flex_gemm
+try:
+    import flex_gemm
+except Exception:
+    flex_gemm = None
 
 
 class Trellis2TexturingPipeline(Pipeline):
